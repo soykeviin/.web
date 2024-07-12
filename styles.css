@@ -1,0 +1,126 @@
+body {
+    font-family: Arial, sans-serif;
+    margin: 0;
+    padding: 0;
+    background-color: #f5f5f5;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    overflow-x: hidden; /* Evita el desplazamiento horizontal */
+}
+
+header {
+    width: 100%;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background-color: #000;
+    color: #fff;
+    padding: 10px 20px;
+}
+
+.logo img {
+    width: 50px; /* Ajusta el ancho según sea necesario */
+    height: 50px; /* Ajusta la altura según sea necesario */
+    object-fit: cover;
+    border-radius: 50%; /* Hace que la imagen sea circular */
+}
+
+.menu-icon {
+    font-size: 24px;
+    cursor: pointer;
+}
+
+main {
+    background-color: #fff;
+    width: 90%;
+    max-width: 600px;
+    margin-top: 20px;
+    padding: 20px;
+    box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+
+    margin: 0;
+   
+}
+
+.profile {
+    text-align: center;
+}
+
+.profile-pic {
+    width: 100px;
+    height: 100px;
+    border-radius: 50%;
+    object-fit: cover;
+}
+
+.username {
+    color: grey;
+}
+
+.about {
+    color: grey;
+    margin-bottom: 20px;
+}
+
+.follow-button {
+    background-color: #000;
+    color: #fff;
+    border: none;
+    padding: 10px 20px;
+    cursor: pointer;
+}
+
+
+
+.recent h2 {
+    margin-bottom: 10px;
+}
+
+.posts {
+    display: flex;
+    gap: 10px;
+}
+
+.posts img {
+    width: 55%;
+    height: auto;
+    object-fit: cover;
+   
+}
+.follow-button {
+    background-color: #000;
+    color: #fff;
+    border: none;
+    padding: 10px 20px;
+    cursor: pointer;
+    border-radius: 20px; /* Bordes redondeados */
+}
+
+.recent {
+    margin-top: 20px;
+    width: 85%; /* Ajusta el ancho según sea necesario */
+    margin-left: 10px;
+    margin-right: auto;
+   
+}
+
+.recent h4 {
+   
+   text-align: center;
+   margin-left: 38px;
+   
+}
+.video-container {
+    display: flex;
+    margin-left: 1px;
+    align-items: center; /* Centra los videos horizontalmente */
+    gap: 5px;
+    margin-top: 20px; 
+}
+
+.video-container video {
+    width: 56%;
+    height: auto;
+    max-width: 400px;
+}
