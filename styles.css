@@ -109,7 +109,7 @@ main {
     display: flex;
    
     align-items: center; /* Centra los videos horizontalmente */
-    gap: 19px;
+    gap: 16px;
     margin-top: 20px; 
 }
 .video-container video {
