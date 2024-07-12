@@ -68,9 +68,7 @@ main {
     cursor: pointer;
 }
 
-.recent {
-    margin-top: 20px;
-}
+
 
 .recent h2 {
     margin-bottom: 10px;
@@ -99,7 +97,7 @@ main {
 .recent {
     margin-top: 20px;
     width: 85%; /* Ajusta el ancho según sea necesario */
-    margin-left: auto;
+    margin-left: 12px;
     margin-right: auto;
     text-align: center;
 }
