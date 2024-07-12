@@ -17,7 +17,6 @@ header {
     background-color: #000;
     color: #fff;
     padding: 10px 20px;
-   
 }
 
 .logo img {
@@ -41,6 +40,7 @@ main {
     box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
 
     margin: 0;
+   
 }
 
 .profile {
@@ -100,13 +100,15 @@ main {
 .recent {
     margin-top: 20px;
     width: 85%; /* Ajusta el ancho según sea necesario */
-    margin-left: 12px;
+    margin-left: 10px;
     margin-right: auto;
-    text-align: center;
+   
 }
 
-.recent h2 {
-    margin-bottom: 10px;
+.recent h4 {
+   
+    margin-left: 140px;
+   
 }
 .video-container {
     display: flex;
