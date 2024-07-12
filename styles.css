@@ -107,13 +107,13 @@ main {
 }
 .video-container {
     display: flex;
-   
+    margin-left: 1px;
     align-items: center; /* Centra los videos horizontalmente */
-    gap: 16px;
+    gap: 5px;
     margin-top: 20px; 
 }
 .video-container video {
-    width: 54%;
+    width: 56%;
     height: auto;
     max-width: 400px;
   
