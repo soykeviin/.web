@@ -15,3 +15,11 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 });
+
+
+ // para no poder hacer click y descargar la foto xd
+document.addEventListener('contextmenu', function(e) {
+    if (e.target.tagName === 'IMG') {
+        e.preventDefault();
+    }
+});
