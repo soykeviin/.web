@@ -71,6 +71,7 @@ Todas las distancias en "puntos" (`MaxAccumulationPoints`, `SL_Buffer_Points`, `
 | `RiskReward` | 2.0 | Relación beneficio/riesgo del TP (2.0 = 1:2). |
 | `RiskPercent` | 10.0 | % del equity arriesgado en la operación (riesgo monetario hasta el SL, no tamaño nominal). |
 | `MaxSpreadPoints` | 3.0 | Spread máximo permitido para entrar. |
+| `AdjustLotToLimits` | false | `false`: si el lote para arriesgar `RiskPercent` supera el máximo del broker o el margen libre, no opera (regla original). `true`: reduce el lote al máximo que permiten el broker y el margen, y opera con **menos** riesgo del configurado (nunca más). |
 | `MagicNumber` | 930900 | Identificador de las operaciones del EA. Usa uno distinto por gráfico o instancia. |
 | `Slippage` | 3.0 | Desviación máxima de precio aceptada al ejecutar. |
 | `DrawObjects` | true | Dibuja el rectángulo, el máximo y el mínimo, la entrada, el SL, el TP, la señal y el resultado. |
@@ -118,6 +119,28 @@ Todas las distancias en "puntos" (`MaxAccumulationPoints`, `SL_Buffer_Points`, `
 **Formato del registro (CSV/Journal):** `Date; TimeNY; ServerTime; Symbol; Event; Direction; Entry; StopLoss; TakeProfit; RangePts; Lots; RiskMoney; Result; PnL; Reason`
 
 ---
+
+## Si el EA no abre operaciones
+
+Cada día que no opera, el EA escribe el motivo en el Journal (pestaña **Diario** del probador o **Expertos** en el terminal). En el modo visual también aparece en la línea `Reason:` del panel. Al terminar el backtest imprime un resumen:
+
+```
+[NAE] ===== RESUMEN: 250 días hábiles evaluados | 0 operaciones abiertas =====
+[NAE]   Días sin operar por INSUFFICIENT_MARGIN: 130
+[NAE]   Días sin operar por INVALID_RANGE: 120
+```
+
+Cuando rechaza una entrada imprime una línea `Entrada LONG/SHORT RECHAZADA: <motivo> | <detalle con los números>`.
+
+| Motivo | Causa habitual | Solución |
+|---|---|---|
+| `INSUFFICIENT_MARGIN` | Con `RiskPercent = 10` y un SL de unos 40 puntos, la posición necesaria vale unas **50 veces el equity**. Muchos brokers apalancan el NASDAQ a 1:20–1:50, así que el margen no alcanza. | Baja `RiskPercent` (p. ej. 1–2%), sube el apalancamiento del test o activa `AdjustLotToLimits`. |
+| `INVALID_LOT_SIZE` | El lote supera el máximo del broker o queda por debajo del mínimo (cuenta pequeña). | Activa `AdjustLotToLimits` (máximo) o aumenta el depósito (mínimo). |
+| `INVALID_RANGE` | La acumulación de 09:00–09:30 supera `MaxAccumulationPoints`. Con el NASDAQ por encima de 20 000, rangos de más de 40 puntos son frecuentes. | Confirma que es el comportamiento deseado o sube `MaxAccumulationPoints`. |
+| `SPREAD_TOO_HIGH` | Spread por encima de `MaxSpreadPoints` en el momento de la ruptura. | Revisa el spread del símbolo o del test y sube `MaxSpreadPoints`. |
+| `TRADING_DISABLED` | Trading algorítmico desactivado en el terminal o en las propiedades del EA (solo en cuenta real o demo). | Activa ambos. |
+| `BREAKOUT_MISSED` | El EA se inició o reinició después de que el precio ya hubiera roto la zona. | Normal: no entra tarde. |
+| `ACCUMULATION_INCOMPLETE` | Faltan velas entre 09:00 y 09:30, o la zona horaria está mal configurada. | Revisa `ServerGMTOffset` y `ServerDSTMode`. |
 
 ## 5. Casos extremos contemplados
 

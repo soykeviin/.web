@@ -3,7 +3,7 @@
 //|    NASDAQ 100 - Ruptura de la acumulación 09:00-09:30 New York   |
 //+------------------------------------------------------------------+
 #property copyright   "8bits Agency"
-#property version     "1.00"
+#property version     "1.10"
 #property description "NASDAQ 100 / M5: ruptura de la acumulación de apertura de Nueva York."
 #property description "Una sola operación por día. Sin martingala, grid, promediado ni reentradas."
 
@@ -70,6 +70,7 @@ input double          RiskReward            = 2.0;    // RiskReward: TP = riesgo
 input group "=== Gestión del riesgo ==="
 input double RiskPercent     = 10.0;                  // RiskPercent: % de equity arriesgado (máx. por día)
 input double MaxSpreadPoints = 3.0;                   // MaxSpreadPoints: spread máximo para entrar
+input bool   AdjustLotToLimits = false;               // Reducir el lote si supera el máximo o el margen libre (riesgo < RiskPercent)
 
 input group "=== Ejecución ==="
 input ulong  MagicNumber = 930900;                    // MagicNumber
@@ -151,6 +152,13 @@ long     g_positionId    = 0;
 datetime g_entryTime     = 0;
 string   g_tradeStatus   = "NONE";
 datetime g_lastPanelUpdate = 0;
+string   g_rejectDetail  = "";    // detalle numérico del último rechazo
+
+//--- estadísticas para el resumen final (backtest)
+string   g_statReasons[];
+int      g_statCounts[];
+int      g_statDays      = 0;
+int      g_statTrades    = 0;
 
 //+------------------------------------------------------------------+
 //| CONVERSIÓN HORARIA SERVIDOR <-> UTC <-> NUEVA YORK               |
@@ -401,6 +409,31 @@ void LogEvent(const string evt,const int dir,const double entry,const double sl,
    FileClose(h);
   }
 
+//--- estadísticas de días sin operar, por motivo
+void StatAdd(const string reason)
+  {
+   int n = ArraySize(g_statReasons);
+   for(int i=0; i<n; i++)
+     {
+      if(g_statReasons[i]==reason)
+        {
+         g_statCounts[i]++;
+         return;
+        }
+     }
+   ArrayResize(g_statReasons,n+1);
+   ArrayResize(g_statCounts,n+1);
+   g_statReasons[n] = reason;
+   g_statCounts[n]  = 1;
+  }
+
+void PrintSummary()
+  {
+   PrintFormat("[NAE] ===== RESUMEN: %d días hábiles evaluados | %d operaciones abiertas =====",g_statDays,g_statTrades);
+   for(int i=0; i<ArraySize(g_statReasons); i++)
+      PrintFormat("[NAE]   Días sin operar por %s: %d",g_statReasons[i],g_statCounts[i]);
+  }
+
 //--- bloquea nuevas entradas hasta el siguiente día NY
 void LockDay(const string reason,const bool record=true)
   {
@@ -413,6 +446,7 @@ void LockDay(const string reason,const bool record=true)
    if(record && !g_noTradeLogged && g_tradesToday==0)
      {
       g_noTradeLogged = true;
+      StatAdd(reason);
       LogEvent("NO_TRADE",0,0.0,0.0,0.0,0.0,0.0,"NOT_EXECUTED",0.0,reason);
      }
    else
@@ -694,6 +728,8 @@ void ResetDay(const datetime nyDay)
                TimeToString(nyDay,TIME_DATE),TimeToString(g_srvAccStart,TIME_DATE|TIME_MINUTES),
                TimeToString(g_srvAccEnd,TIME_MINUTES),TimeToString(g_srvTradeEnd,TIME_MINUTES),Money(g_dayStartEquity));
 
+   if(!g_isWeekend)
+      g_statDays++;
    if(g_isWeekend)
       LockDay("WEEKEND",false);
    else if(g_tradesToday >= MAX_TRADES_PER_DAY)
@@ -861,16 +897,20 @@ double CalculatePositionSize(const int dir,const double entry,const double sl,
       why = StringFormat("lote calculado %.4f < mínimo %s (redondear arriba superaría el riesgo)",rawLots,Lots(g_volMin));
       return 0.0;
      }
-   if(lots > g_volMax + 1e-12)
-     {
-      why = StringFormat("lote calculado %s > máximo %s",Lots(lots),Lots(g_volMax));
-      return 0.0;
-     }
+   double maxLots  = g_volMax;
    double volLimit = SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_LIMIT);
-   if(volLimit > 0.0 && lots > volLimit + 1e-12)
+   if(volLimit > 0.0 && volLimit < maxLots)
+      maxLots = volLimit;
+   if(lots > maxLots + 1e-12)
      {
-      why = StringFormat("lote calculado %s > límite de volumen %s",Lots(lots),Lots(volLimit));
-      return 0.0;
+      if(!AdjustLotToLimits)
+        {
+         why = StringFormat("lote calculado %s > máximo del broker %s (active AdjustLotToLimits para operar con el máximo)",
+                            Lots(lots),Lots(maxLots));
+         return 0.0;
+        }
+      PrintFormat("[NAE] Lote %s reducido al máximo del broker %s: el riesgo queda por debajo de RiskPercent.",Lots(lots),Lots(maxLots));
+      lots = NormalizeDouble(MathFloor(maxLots/g_volStep + 1e-9)*g_volStep,g_volDigits);
      }
    riskMoney = lots*lossPerLot;
    return lots;
@@ -878,10 +918,12 @@ double CalculatePositionSize(const int dir,const double entry,const double sl,
 
 bool TradingAllowed(const int dir)
   {
-   if(TerminalInfoInteger(TERMINAL_TRADE_ALLOWED)==0 || MQLInfoInteger(MQL_TRADE_ALLOWED)==0)
-      return false;
+   if(TerminalInfoInteger(TERMINAL_TRADE_ALLOWED)==0)
+     { g_rejectDetail = "botón 'Trading algorítmico' desactivado en el terminal"; return false; }
+   if(MQLInfoInteger(MQL_TRADE_ALLOWED)==0)
+     { g_rejectDetail = "'Permitir trading algorítmico' desactivado en las propiedades del EA"; return false; }
    if(AccountInfoInteger(ACCOUNT_TRADE_ALLOWED)==0 || AccountInfoInteger(ACCOUNT_TRADE_EXPERT)==0)
-      return false;
+     { g_rejectDetail = "la cuenta no permite operar o no permite EAs (¿cuenta investor?)"; return false; }
    ENUM_SYMBOL_TRADE_MODE mode = (ENUM_SYMBOL_TRADE_MODE)SymbolInfoInteger(_Symbol,SYMBOL_TRADE_MODE);
    if(mode==SYMBOL_TRADE_MODE_FULL)
       return true;
@@ -889,12 +931,15 @@ bool TradingAllowed(const int dir)
       return true;
    if(mode==SYMBOL_TRADE_MODE_SHORTONLY && dir < 0)
       return true;
+   g_rejectDetail = "el símbolo no permite operar en esta dirección (SYMBOL_TRADE_MODE)";
    return false;
   }
 
 bool ValidateStops(const TradePlan &plan,const MqlTick &tick,string &reason)
   {
    double stopsLevel = (double)SymbolInfoInteger(_Symbol,SYMBOL_TRADE_STOPS_LEVEL)*_Point;
+   g_rejectDetail = StringFormat("entrada %s SL %s TP %s bid %s ask %s stopsLevel %s",
+                                 Px(plan.entry),Px(plan.sl),Px(plan.tp),Px(tick.bid),Px(tick.ask),Px(stopsLevel));
    if(plan.direction > 0)
      {
       if(plan.sl <= 0.0 || plan.entry - plan.sl <= 0.0 || tick.bid - plan.sl <= stopsLevel)
@@ -932,7 +977,7 @@ bool CheckOrderRequest(const TradePlan &plan,string &reason)
    if(OrderCheck(req,chk))
       return true;
    reason = (chk.retcode==TRADE_RETCODE_NO_MONEY) ? "INSUFFICIENT_MARGIN" : "ORDER_CHECK_FAILED";
-   PrintFormat("[NAE] OrderCheck rechazó la orden: retcode=%u (%s)",chk.retcode,chk.comment);
+   g_rejectDetail = StringFormat("OrderCheck: retcode=%u (%s) lotes %s",chk.retcode,chk.comment,Lots(plan.lots));
    return false;
   }
 
@@ -951,6 +996,7 @@ bool CheckRiskConditions(const int dir,const datetime now,TradePlan &plan,string
   {
    ZeroMemory(plan);
    plan.direction = dir;
+   g_rejectDetail = "";
 
    // 1. Horario permitido
    if(now < g_srvAccEnd || now >= g_srvTradeEnd)
@@ -976,8 +1022,13 @@ bool CheckRiskConditions(const int dir,const datetime now,TradePlan &plan,string
    MqlTick tick;
    if(!SymbolInfoTick(_Symbol,tick) || tick.ask <= 0.0 || tick.bid <= 0.0)
      { reason = "NO_PRICE"; return false; }
-   if(PriceToPoints(tick.ask - tick.bid) > MaxSpreadPoints + 1e-9)
-     { reason = "SPREAD_TOO_HIGH"; return false; }
+   double spreadPts = PriceToPoints(tick.ask - tick.bid);
+   if(spreadPts > MaxSpreadPoints + 1e-9)
+     {
+      g_rejectDetail = StringFormat("spread %s pts > MaxSpreadPoints %s",Pts(spreadPts),Pts(MaxSpreadPoints));
+      reason = "SPREAD_TOO_HIGH";
+      return false;
+     }
    // 7. Stop Loss (y TP derivado)
    plan.entry = (dir > 0) ? tick.ask : tick.bid;
    plan.sl    = CalculateStopLoss(dir);
@@ -992,15 +1043,40 @@ bool CheckRiskConditions(const int dir,const datetime now,TradePlan &plan,string
    plan.riskMoney  = riskMoney;
    if(plan.lots <= 0.0)
      {
-      PrintFormat("[NAE] Lotaje inválido: %s",why);
+      g_rejectDetail = why;
       reason = "INVALID_LOT_SIZE";
       return false;
      }
    // 9. Margen
-   double margin = 0.0;
-   if(!OrderCalcMargin(dir > 0 ? ORDER_TYPE_BUY : ORDER_TYPE_SELL,_Symbol,plan.lots,plan.entry,margin)
-      || margin > AccountInfoDouble(ACCOUNT_MARGIN_FREE))
-     { reason = "INSUFFICIENT_MARGIN"; return false; }
+   double margin     = 0.0;
+   double freeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
+   if(!OrderCalcMargin(dir > 0 ? ORDER_TYPE_BUY : ORDER_TYPE_SELL,_Symbol,plan.lots,plan.entry,margin))
+     {
+      g_rejectDetail = StringFormat("OrderCalcMargin falló (error %d)",GetLastError());
+      reason = "INSUFFICIENT_MARGIN";
+      return false;
+     }
+   if(margin > freeMargin)
+     {
+      double nominal = plan.lots*SymbolInfoDouble(_Symbol,SYMBOL_TRADE_CONTRACT_SIZE)*plan.entry;
+      double fitted  = 0.0;
+      if(AdjustLotToLimits && margin > 0.0)
+         fitted = NormalizeDouble(MathFloor(plan.lots*(freeMargin*0.95/margin)/g_volStep + 1e-9)*g_volStep,g_volDigits);
+      if(fitted < g_volMin - 1e-12)
+        {
+         g_rejectDetail = StringFormat("%s lotes (riesgo %s, SL %s pts) requieren %s de margen y el margen libre es %s. "+
+                                       "Nominal = %.1f veces el equity: el apalancamiento del símbolo no lo permite. "+
+                                       "Baje RiskPercent o active AdjustLotToLimits.",
+                                       Lots(plan.lots),Money(plan.riskMoney),Pts(PriceToPoints(MathAbs(plan.entry-plan.sl))),
+                                       Money(margin),Money(freeMargin),nominal/MathMax(AccountInfoDouble(ACCOUNT_EQUITY),1e-9));
+         reason = "INSUFFICIENT_MARGIN";
+         return false;
+        }
+      PrintFormat("[NAE] Lote %s reducido a %s por margen (requería %s, libre %s): el riesgo queda por debajo de RiskPercent.",
+                  Lots(plan.lots),Lots(fitted),Money(margin),Money(freeMargin));
+      plan.riskMoney = plan.riskMoney*fitted/plan.lots;
+      plan.lots      = fitted;
+     }
    if(!CheckOrderRequest(plan,reason))
       return false;
    // 10. Ruptura: el precio sigue fuera de la zona en la dirección de la orden
@@ -1042,6 +1118,7 @@ void OnPositionOpened(const TradePlan &plan,const double fillPrice)
    g_entryTime   = TimeCurrent();
    g_lastReason  = (plan.direction > 0) ? "BREAK_ABOVE_ACC_HIGH" : "BREAK_BELOW_ACC_LOW";
    g_tradeStatus = Side(plan.direction)+" OPEN";
+   g_statTrades++;
 
    if(fillPrice > 0.0)
      {
@@ -1117,11 +1194,12 @@ void TryExecuteSignal(const datetime now)
       if(IsTransientReason(reason))
         {
          if(reason!=g_lastTransient)
-            PrintFormat("[NAE] Entrada %s en espera: %s (se reintenta durante 1 vela desde la ruptura)",
-                        Side(g_signalDir),reason);
+            PrintFormat("[NAE] Entrada %s en espera: %s %s (se reintenta durante 1 vela desde la ruptura)",
+                        Side(g_signalDir),reason,g_rejectDetail);
          g_lastTransient = reason;
          return;
         }
+      PrintFormat("[NAE] Entrada %s RECHAZADA: %s | %s",Side(g_signalDir),reason,g_rejectDetail);
       LockDay(reason);
       return;
      }
@@ -1452,6 +1530,10 @@ int OnInit()
    g_positionId   = 0;
    g_planActive   = false;
    ZeroMemory(g_plan);
+   ArrayResize(g_statReasons,0);
+   ArrayResize(g_statCounts,0);
+   g_statDays     = 0;
+   g_statTrades   = 0;
 
    CheckTimezoneSetup(tester);
    CheckSymbol();
@@ -1475,6 +1557,8 @@ int OnInit()
 void OnDeinit(const int reason)
   {
    EventKillTimer();
+   if(g_statDays > 0)
+      PrintSummary();
    if(g_objPrefix=="")
       return;
    ObjectsDeleteAll(0,g_objPrefix+"PANEL_");
