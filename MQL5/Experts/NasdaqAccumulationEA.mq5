@@ -1,0 +1,1558 @@
+﻿//+------------------------------------------------------------------+
+//|                                         NasdaqAccumulationEA.mq5 |
+//|    NASDAQ 100 - Ruptura de la acumulación 09:00-09:30 New York   |
+//+------------------------------------------------------------------+
+#property copyright   "8bits Agency"
+#property version     "1.00"
+#property description "NASDAQ 100 / M5: ruptura de la acumulación de apertura de Nueva York."
+#property description "Una sola operación por día. Sin martingala, grid, promediado ni reentradas."
+
+#include <Trade\Trade.mqh>
+
+//+------------------------------------------------------------------+
+//| Tipos                                                            |
+//+------------------------------------------------------------------+
+enum ENUM_PRICE_UNIT
+  {
+   UNIT_INDEX_POINTS = 0, // Puntos de índice (1.0 de precio)
+   UNIT_MT5_POINTS   = 1  // Puntos MT5 (_Point del símbolo)
+  };
+
+enum ENUM_SERVER_DST
+  {
+   SERVER_DST_NONE = 0,   // Sin horario de verano
+   SERVER_DST_US   = 1,   // Horario de verano de EE.UU.
+   SERVER_DST_EU   = 2    // Horario de verano de Europa
+  };
+
+enum ENUM_EA_PHASE
+  {
+   PHASE_WAIT_SESSION,    // antes del inicio de la acumulación
+   PHASE_BUILDING,        // dentro de la ventana de acumulación
+   PHASE_WAIT_BREAKOUT,   // acumulación válida, esperando cierre fuera de la zona
+   PHASE_SIGNAL_PENDING,  // ruptura detectada, ejecutando la entrada
+   PHASE_DONE             // día terminado (operación realizada o bloqueado)
+  };
+
+struct TradePlan
+  {
+   int               direction;   // +1 LONG, -1 SHORT
+   double            entry;       // Ask (LONG) o Bid (SHORT)
+   double            sl;
+   double            tp;
+   double            lots;
+   double            riskMoney;   // riesgo monetario real con el lotaje final
+   double            riskBudget;  // riesgo máximo permitido (RiskPercent)
+  };
+
+//+------------------------------------------------------------------+
+//| Inputs                                                           |
+//+------------------------------------------------------------------+
+input group "=== Sesión (hora de Nueva York) ==="
+input ENUM_TIMEFRAMES SignalTimeframe = PERIOD_M5;    // Timeframe de la estrategia
+input int    StartHour      = 9;                      // StartHour: inicio acumulación/sesión (NY)
+input int    StartMinute    = 0;                      // StartMinute
+input int    AccumEndHour   = 9;                      // AccumEndHour: fin acumulación = inicio búsqueda de ruptura (NY)
+input int    AccumEndMinute = 30;                     // AccumEndMinute
+input int    EndHour        = 12;                     // EndHour: última hora para abrir operación (NY)
+input int    EndMinute      = 0;                      // EndMinute
+
+input group "=== Zona horaria del servidor del broker ==="
+input int             ServerGMTOffset = 2;            // Offset GMT del servidor en horario de invierno (horas)
+input ENUM_SERVER_DST ServerDSTMode   = SERVER_DST_US;// Horario de verano que aplica el servidor
+
+input group "=== Estrategia ==="
+input ENUM_PRICE_UNIT PointUnit             = UNIT_INDEX_POINTS; // Unidad de todos los inputs en "puntos"
+input double          MaxAccumulationPoints = 40.0;   // MaxAccumulationPoints: rango máximo de la acumulación
+input double          SL_Buffer_Points      = 1.0;    // SL_Buffer_Points: distancia extra del SL tras el extremo
+input double          RiskReward            = 2.0;    // RiskReward: TP = riesgo x RiskReward
+
+input group "=== Gestión del riesgo ==="
+input double RiskPercent     = 10.0;                  // RiskPercent: % de equity arriesgado (máx. por día)
+input double MaxSpreadPoints = 3.0;                   // MaxSpreadPoints: spread máximo para entrar
+
+input group "=== Ejecución ==="
+input ulong  MagicNumber = 930900;                    // MagicNumber
+input double Slippage    = 3.0;                       // Slippage/Deviation máximo (en la unidad de PointUnit)
+
+input group "=== Visual y registro ==="
+input bool   DrawObjects          = true;             // Dibujar acumulación y niveles
+input bool   ShowPanel            = true;             // Mostrar panel informativo
+input bool   KeepPreviousDrawings = false;            // Conservar dibujos de días anteriores
+input bool   WriteCSVLog          = true;             // Guardar registro CSV (carpeta Common\Files)
+input string CSVFileName          = "NasdaqAccumulationEA_log.csv"; // Nombre del archivo CSV
+
+//+------------------------------------------------------------------+
+//| Constantes                                                       |
+//+------------------------------------------------------------------+
+#define EA_TITLE             "NASDAQ ACCUMULATION EA"
+#define MAX_TRADES_PER_DAY   1   // Regla fundamental: NO es un input a propósito
+#define MAX_ORDER_ATTEMPTS   3   // Reintentos de envío ante errores transitorios
+#define MAX_PROTECT_ATTEMPTS 3   // Intentos de fijar SL/TP antes de cerrar por seguridad
+#define PANEL_LINES          13
+
+//+------------------------------------------------------------------+
+//| Variables globales                                               |
+//+------------------------------------------------------------------+
+CTrade   g_trade;
+
+//--- especificaciones / configuración
+double   g_unit         = 1.0;   // precio equivalente a 1 "punto" de los inputs
+double   g_tickSize     = 0.0;
+double   g_volMin       = 0.0;
+double   g_volMax       = 0.0;
+double   g_volStep      = 0.0;
+int      g_volDigits    = 2;
+int      g_tfSeconds    = 300;
+ulong    g_deviation    = 0;
+bool     g_isHedging    = true;
+bool     g_drawEnabled  = false;
+bool     g_panelEnabled = false;
+bool     g_csvEnabled   = false;
+string   g_objPrefix    = "";
+ENUM_ORDER_TYPE_FILLING g_filling = ORDER_FILLING_FOK;
+
+//--- estado del día (hora NY)
+datetime g_nyDay        = 0;     // medianoche NY (reloj NY) del día en curso
+datetime g_srvDayStart  = 0;     // medianoche NY expresada en hora del servidor
+datetime g_srvAccStart  = 0;     // inicio acumulación (servidor)
+datetime g_srvAccEnd    = 0;     // fin acumulación / inicio búsqueda (servidor)
+datetime g_srvTradeEnd  = 0;     // fin de la ventana de entradas (servidor)
+bool     g_isWeekend    = false;
+ENUM_EA_PHASE g_phase   = PHASE_WAIT_SESSION;
+
+bool     g_accBuilt     = false; // acumulación cerrada y evaluada
+bool     g_accValid     = false; // rango dentro del máximo
+double   g_accHigh      = 0.0;
+double   g_accLow       = 0.0;
+double   g_accRangePts  = 0.0;
+double   g_estLots      = 0.0;   // lotaje estimado (informativo para el panel)
+
+int      g_tradesToday   = 0;
+bool     g_dayLocked     = false; // sin más entradas hasta el siguiente día NY
+bool     g_noTradeLogged = false;
+string   g_lastReason    = "";
+double   g_dayStartEquity= 0.0;
+double   g_dailyPnL      = 0.0;   // resultado realizado del día
+
+datetime g_lastCheckedBar  = 0;   // última vela M5 evaluada como posible ruptura
+datetime g_lastScanBarOpen = 0;   // vela en formación cuando se hizo el último escaneo
+int      g_signalDir       = 0;   // ruptura pendiente de ejecutar
+datetime g_signalBarTime   = 0;
+double   g_signalClose     = 0.0;
+int      g_orderAttempts   = 0;
+string   g_lastTransient   = "";
+
+//--- operación del día
+TradePlan g_plan;
+bool     g_planActive    = false; // la posición fue abierta por esta instancia
+bool     g_tpAdjusted    = false;
+int      g_protectFails  = 0;
+long     g_positionId    = 0;
+datetime g_entryTime     = 0;
+string   g_tradeStatus   = "NONE";
+datetime g_lastPanelUpdate = 0;
+
+//+------------------------------------------------------------------+
+//| CONVERSIÓN HORARIA SERVIDOR <-> UTC <-> NUEVA YORK               |
+//+------------------------------------------------------------------+
+datetime MakeDate(const int year,const int mon,const int day)
+  {
+   MqlDateTime t;
+   ZeroMemory(t);
+   t.year = year;
+   t.mon  = mon;
+   t.day  = day;
+   return StructToTime(t);
+  }
+
+int WeekDay(const datetime t)
+  {
+   MqlDateTime s;
+   TimeToStruct(t,s);
+   return s.day_of_week;
+  }
+
+int YearOf(const datetime t)
+  {
+   MqlDateTime s;
+   TimeToStruct(t,s);
+   return s.year;
+  }
+
+datetime DayStart(const datetime t)
+  {
+   return (datetime)(((long)t/86400)*86400);
+  }
+
+//--- n-ésimo domingo de un mes (00:00)
+datetime NthSunday(const int year,const int mon,const int n)
+  {
+   datetime first = MakeDate(year,mon,1);
+   int shift = (7 - WeekDay(first)) % 7;
+   return first + (shift + 7*(n-1))*86400;
+  }
+
+//--- último domingo de un mes (00:00)
+datetime LastSunday(const int year,const int mon)
+  {
+   datetime firstNext = (mon==12) ? MakeDate(year+1,1,1) : MakeDate(year,mon+1,1);
+   datetime lastDay   = firstNext - 86400;
+   return lastDay - WeekDay(lastDay)*86400;
+  }
+
+//--- EE.UU.: 2º domingo de marzo 02:00 local -> 1er domingo de noviembre 02:00 local
+bool IsUsDstUtc(const datetime utc)
+  {
+   int y = YearOf(utc);
+   datetime start = NthSunday(y,3,2)  + 7*3600; // 02:00 EST = 07:00 UTC
+   datetime end   = NthSunday(y,11,1) + 6*3600; // 02:00 EDT = 06:00 UTC
+   return (utc >= start && utc < end);
+  }
+
+//--- Europa: último domingo de marzo 01:00 UTC -> último domingo de octubre 01:00 UTC
+bool IsEuDstUtc(const datetime utc)
+  {
+   int y = YearOf(utc);
+   datetime start = LastSunday(y,3)  + 3600;
+   datetime end   = LastSunday(y,10) + 3600;
+   return (utc >= start && utc < end);
+  }
+
+int ServerOffsetSeconds(const datetime utc)
+  {
+   int offset = ServerGMTOffset*3600;
+   if(ServerDSTMode==SERVER_DST_US && IsUsDstUtc(utc))
+      offset += 3600;
+   if(ServerDSTMode==SERVER_DST_EU && IsEuDstUtc(utc))
+      offset += 3600;
+   return offset;
+  }
+
+int NewYorkOffsetSeconds(const datetime utc)
+  {
+   return IsUsDstUtc(utc) ? -4*3600 : -5*3600;
+  }
+
+datetime ServerToUtc(const datetime srv)
+  {
+   datetime approx = srv - ServerGMTOffset*3600; // sólo para decidir si hay DST
+   return srv - ServerOffsetSeconds(approx);
+  }
+
+datetime UtcToServer(const datetime utc)  { return utc + ServerOffsetSeconds(utc); }
+datetime UtcToNewYork(const datetime utc) { return utc + NewYorkOffsetSeconds(utc); }
+
+datetime NewYorkToUtc(const datetime ny)
+  {
+   datetime approx = ny + 5*3600; // sólo para decidir si hay DST
+   return ny - NewYorkOffsetSeconds(approx);
+  }
+
+datetime ServerToNewYork(const datetime srv) { return UtcToNewYork(ServerToUtc(srv)); }
+datetime NewYorkToServer(const datetime ny)  { return UtcToServer(NewYorkToUtc(ny)); }
+
+//+------------------------------------------------------------------+
+//| UTILIDADES                                                       |
+//+------------------------------------------------------------------+
+double PointsToPrice(const double pts)   { return pts*g_unit; }
+double PriceToPoints(const double price) { return (g_unit > 0.0) ? price/g_unit : 0.0; }
+
+double FloorToTick(const double price) { return NormalizeDouble(MathFloor(price/g_tickSize + 1e-9)*g_tickSize,_Digits); }
+double CeilToTick(const double price)  { return NormalizeDouble(MathCeil(price/g_tickSize - 1e-9)*g_tickSize,_Digits); }
+
+string Px(const double price)   { return DoubleToString(price,_Digits); }
+string Pts(const double pts)    { return DoubleToString(pts,2); }
+string Lots(const double lots)  { return DoubleToString(lots,g_volDigits); }
+string Money(const double v)    { return DoubleToString(v,2) + " " + AccountInfoString(ACCOUNT_CURRENCY); }
+string Side(const int dir)      { return (dir > 0) ? "LONG" : (dir < 0) ? "SHORT" : "-"; }
+
+int VolumeDigits(const double step)
+  {
+   int    digits = 0;
+   double s      = step;
+   while(digits < 8 && MathAbs(s - MathRound(s)) > 1e-8)
+     {
+      s *= 10.0;
+      digits++;
+     }
+   return digits;
+  }
+
+ENUM_ORDER_TYPE_FILLING ResolveFilling()
+  {
+   long modes = SymbolInfoInteger(_Symbol,SYMBOL_FILLING_MODE);
+   if((modes & SYMBOL_FILLING_FOK) != 0)
+      return ORDER_FILLING_FOK;
+   if((modes & SYMBOL_FILLING_IOC) != 0)
+      return ORDER_FILLING_IOC;
+   return ORDER_FILLING_RETURN;
+  }
+
+//--- posición abierta por este EA en este símbolo (queda seleccionada)
+ulong FindOurPosition()
+  {
+   for(int i=PositionsTotal()-1; i>=0; i--)
+     {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket==0)
+         continue;
+      if(PositionGetString(POSITION_SYMBOL)!=_Symbol)
+         continue;
+      if((ulong)PositionGetInteger(POSITION_MAGIC)!=MagicNumber)
+         continue;
+      return ticket;
+     }
+   return 0;
+  }
+
+//--- en cuentas netting cualquier posición del símbolo se fusionaría con la nuestra
+bool AnyPositionOnSymbol()
+  {
+   for(int i=PositionsTotal()-1; i>=0; i--)
+     {
+      if(PositionGetTicket(i)>0 && PositionGetString(POSITION_SYMBOL)==_Symbol)
+         return true;
+     }
+   return false;
+  }
+
+double FloatingPnL()
+  {
+   if(FindOurPosition()==0)
+      return 0.0;
+   return PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+  }
+
+bool IsOurDeal(const ulong deal)
+  {
+   if(HistoryDealGetString(deal,DEAL_SYMBOL)!=_Symbol)
+      return false;
+   if((ulong)HistoryDealGetInteger(deal,DEAL_MAGIC)==MagicNumber)
+      return true;
+   // Cierre manual de nuestra posición: el deal no lleva magic pero sí el ID de posición
+   return (g_positionId!=0 && HistoryDealGetInteger(deal,DEAL_POSITION_ID)==g_positionId);
+  }
+
+double DealNet(const ulong deal)
+  {
+   return HistoryDealGetDouble(deal,DEAL_PROFIT) + HistoryDealGetDouble(deal,DEAL_SWAP)
+        + HistoryDealGetDouble(deal,DEAL_COMMISSION) + HistoryDealGetDouble(deal,DEAL_FEE);
+  }
+
+//--- reconstruye operaciones y resultado del día desde el historial (seguro ante reinicios)
+void SyncTradesFromHistory()
+  {
+   int    entries = 0;
+   double pnl     = 0.0;
+   if(HistorySelect(g_srvDayStart,TimeCurrent()+86400))
+     {
+      int total = HistoryDealsTotal();
+      for(int i=0; i<total; i++)
+        {
+         ulong deal = HistoryDealGetTicket(i);
+         if(deal==0 || !IsOurDeal(deal))
+            continue;
+         if((ENUM_DEAL_ENTRY)HistoryDealGetInteger(deal,DEAL_ENTRY)==DEAL_ENTRY_IN)
+            entries++;
+         pnl += DealNet(deal);
+        }
+     }
+   if(entries > g_tradesToday)
+      g_tradesToday = entries;
+   g_dailyPnL    = pnl;
+  }
+
+//+------------------------------------------------------------------+
+//| REGISTRO (Journal + CSV)                                         |
+//+------------------------------------------------------------------+
+void LogEvent(const string evt,const int dir,const double entry,const double sl,const double tp,
+              const double lots,const double riskMoney,const string outcome,const double pnl,const string reason)
+  {
+   datetime srv   = TimeCurrent();
+   datetime ny    = ServerToNewYork(srv);
+   string   date  = TimeToString(ny,TIME_DATE);
+   string   clock = TimeToString(ny,TIME_MINUTES);
+   string   range = (g_accBuilt || g_accHigh > 0.0) ? Pts(g_accRangePts) : "-";
+   string   sEntry= (entry > 0.0) ? Px(entry) : "-";
+   string   sSL   = (sl > 0.0) ? Px(sl) : "-";
+   string   sTP   = (tp > 0.0) ? Px(tp) : "-";
+   string   sLots = (lots > 0.0) ? Lots(lots) : "-";
+   string   sRisk = (riskMoney > 0.0) ? DoubleToString(riskMoney,2) : "-";
+   string   sPnL  = (evt=="TRADE_CLOSE") ? DoubleToString(pnl,2) : "-";
+
+   PrintFormat("[NAE] %s %s NY | %s | %s | entry=%s sl=%s tp=%s | range=%s pts | lots=%s | risk=%s | result=%s | P/L=%s | reason=%s",
+               date,clock,evt,Side(dir),sEntry,sSL,sTP,range,sLots,sRisk,outcome,sPnL,reason);
+
+   if(!g_csvEnabled)
+      return;
+   int h = FileOpen(CSVFileName,FILE_READ|FILE_WRITE|FILE_TXT|FILE_ANSI|FILE_SHARE_READ|FILE_COMMON);
+   if(h==INVALID_HANDLE)
+     {
+      PrintFormat("[NAE] ERROR: no se pudo abrir el CSV '%s' (error %d)",CSVFileName,GetLastError());
+      return;
+     }
+   if(FileSize(h)==0)
+      FileWriteString(h,"Date;TimeNY;ServerTime;Symbol;Event;Direction;Entry;StopLoss;TakeProfit;RangePts;Lots;RiskMoney;Result;PnL;Reason\r\n");
+   FileSeek(h,0,SEEK_END);
+   string line = StringFormat("%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s\r\n",
+                              date,clock,TimeToString(srv,TIME_DATE|TIME_SECONDS),_Symbol,evt,Side(dir),
+                              sEntry,sSL,sTP,range,sLots,sRisk,outcome,sPnL,reason);
+   FileWriteString(h,line);
+   FileClose(h);
+  }
+
+//--- bloquea nuevas entradas hasta el siguiente día NY
+void LockDay(const string reason,const bool record=true)
+  {
+   if(g_dayLocked)
+      return;
+   g_dayLocked  = true;
+   g_signalDir  = 0;
+   g_lastReason = reason;
+   g_phase      = PHASE_DONE;
+   if(record && !g_noTradeLogged && g_tradesToday==0)
+     {
+      g_noTradeLogged = true;
+      LogEvent("NO_TRADE",0,0.0,0.0,0.0,0.0,0.0,"NOT_EXECUTED",0.0,reason);
+     }
+   else
+      PrintFormat("[NAE] Entradas bloqueadas hasta el próximo día NY: %s",reason);
+  }
+
+//+------------------------------------------------------------------+
+//| DIBUJO                                                           |
+//+------------------------------------------------------------------+
+string DayPrefix(const datetime nyDay) { return g_objPrefix + TimeToString(nyDay,TIME_DATE) + "_"; }
+string ObjName(const string suffix)    { return DayPrefix(g_nyDay) + suffix; }
+
+void ApplyCommonProps(const string name,const color clr)
+  {
+   ObjectSetInteger(0,name,OBJPROP_COLOR,clr);
+   ObjectSetInteger(0,name,OBJPROP_SELECTABLE,false);
+   ObjectSetInteger(0,name,OBJPROP_SELECTED,false);
+   ObjectSetInteger(0,name,OBJPROP_HIDDEN,true);
+  }
+
+void DrawRectangle(const string name,const datetime t1,const double p1,const datetime t2,const double p2,const color clr)
+  {
+   if(ObjectFind(0,name)<0)
+     {
+      if(!ObjectCreate(0,name,OBJ_RECTANGLE,0,t1,p1,t2,p2))
+         return;
+      ObjectSetInteger(0,name,OBJPROP_FILL,true);
+      ObjectSetInteger(0,name,OBJPROP_BACK,true);
+     }
+   else
+     {
+      ObjectMove(0,name,0,t1,p1);
+      ObjectMove(0,name,1,t2,p2);
+     }
+   ApplyCommonProps(name,clr);
+  }
+
+void DrawSegment(const string name,const datetime t1,const datetime t2,const double price,
+                 const color clr,const ENUM_LINE_STYLE style,const int width)
+  {
+   if(ObjectFind(0,name)<0)
+     {
+      if(!ObjectCreate(0,name,OBJ_TREND,0,t1,price,t2,price))
+         return;
+      ObjectSetInteger(0,name,OBJPROP_RAY_RIGHT,false);
+     }
+   else
+     {
+      ObjectMove(0,name,0,t1,price);
+      ObjectMove(0,name,1,t2,price);
+     }
+   ObjectSetInteger(0,name,OBJPROP_STYLE,style);
+   ObjectSetInteger(0,name,OBJPROP_WIDTH,width);
+   ApplyCommonProps(name,clr);
+  }
+
+void DrawLabelText(const string name,const datetime t,const double price,const string text,
+                   const color clr,const ENUM_ANCHOR_POINT anchor)
+  {
+   if(ObjectFind(0,name)<0)
+     {
+      if(!ObjectCreate(0,name,OBJ_TEXT,0,t,price))
+         return;
+     }
+   else
+      ObjectMove(0,name,0,t,price);
+   ObjectSetString(0,name,OBJPROP_TEXT,text);
+   ObjectSetString(0,name,OBJPROP_FONT,"Arial");
+   ObjectSetInteger(0,name,OBJPROP_FONTSIZE,8);
+   ObjectSetInteger(0,name,OBJPROP_ANCHOR,anchor);
+   ApplyCommonProps(name,clr);
+  }
+
+void DrawArrow(const string name,const ENUM_OBJECT type,const datetime t,const double price,const color clr)
+  {
+   if(ObjectFind(0,name)<0)
+     {
+      if(!ObjectCreate(0,name,type,0,t,price))
+         return;
+     }
+   else
+      ObjectMove(0,name,0,t,price);
+   ObjectSetInteger(0,name,OBJPROP_WIDTH,2);
+   ApplyCommonProps(name,clr);
+  }
+
+//--- rectángulo 09:00-09:30 NY + máximo y mínimo extendidos hasta el fin de la sesión
+void DrawAccumulation(const double hi,const double lo,const bool valid)
+  {
+   if(!g_drawEnabled || hi<=0.0 || lo<=0.0)
+      return;
+   color boxClr = valid ? C'25,55,95' : C'85,40,40';
+   DrawRectangle(ObjName("ACC_BOX"),g_srvAccStart,hi,g_srvAccEnd,lo,boxClr);
+   DrawSegment(ObjName("ACC_HIGH"),g_srvAccStart,g_srvTradeEnd,hi,clrDeepSkyBlue,STYLE_DASH,1);
+   DrawSegment(ObjName("ACC_LOW"),g_srvAccStart,g_srvTradeEnd,lo,clrOrange,STYLE_DASH,1);
+   DrawLabelText(ObjName("ACC_HIGH_TXT"),g_srvAccStart,hi,"ACC HIGH "+Px(hi),clrDeepSkyBlue,ANCHOR_LEFT_LOWER);
+   string lowTxt = "ACC LOW "+Px(lo)+"  |  "+Pts(PriceToPoints(hi-lo))+" pts"+(valid ? "" : "  INVALID RANGE");
+   DrawLabelText(ObjName("ACC_LOW_TXT"),g_srvAccStart,lo,lowTxt,valid ? clrOrange : clrTomato,ANCHOR_LEFT_UPPER);
+   ChartRedraw(0);
+  }
+
+void DrawTradeLevels(const int dir,const double entry,const double sl,const double tp,const datetime t)
+  {
+   if(!g_drawEnabled)
+      return;
+   datetime tEnd = t + 12*g_tfSeconds;
+   if(g_srvTradeEnd > tEnd)
+      tEnd = g_srvTradeEnd;
+   DrawSegment(ObjName("ENTRY"),t,tEnd,entry,clrWhite,STYLE_DOT,1);
+   DrawSegment(ObjName("SL"),t,tEnd,sl,clrRed,STYLE_SOLID,2);
+   DrawSegment(ObjName("TP"),t,tEnd,tp,clrLime,STYLE_SOLID,2);
+   DrawLabelText(ObjName("ENTRY_TXT"),tEnd,entry,"ENTRY "+Px(entry),clrWhite,ANCHOR_LEFT);
+   DrawLabelText(ObjName("SL_TXT"),tEnd,sl,"SL "+Px(sl),clrRed,ANCHOR_LEFT);
+   DrawLabelText(ObjName("TP_TXT"),tEnd,tp,"TP "+Px(tp),clrLime,ANCHOR_LEFT);
+   DrawArrow(ObjName("SIGNAL_ARROW"),dir > 0 ? OBJ_ARROW_BUY : OBJ_ARROW_SELL,t,entry,dir > 0 ? clrLime : clrRed);
+   DrawLabelText(ObjName("SIGNAL_TXT"),t,entry,Side(dir),dir > 0 ? clrLime : clrRed,dir > 0 ? ANCHOR_RIGHT_UPPER : ANCHOR_RIGHT_LOWER);
+   ChartRedraw(0);
+  }
+
+void DrawResult(const datetime t,const double price,const string text,const bool win)
+  {
+   if(!g_drawEnabled)
+      return;
+   DrawLabelText(ObjName("RESULT"),t,price,text,win ? clrLime : clrTomato,ANCHOR_LEFT_LOWER);
+   ChartRedraw(0);
+  }
+
+//+------------------------------------------------------------------+
+//| PANEL                                                            |
+//+------------------------------------------------------------------+
+void CreatePanel()
+  {
+   string bg = g_objPrefix+"PANEL_BG";
+   if(ObjectFind(0,bg)<0)
+      ObjectCreate(0,bg,OBJ_RECTANGLE_LABEL,0,0,0);
+   ObjectSetInteger(0,bg,OBJPROP_CORNER,CORNER_LEFT_UPPER);
+   ObjectSetInteger(0,bg,OBJPROP_XDISTANCE,8);
+   ObjectSetInteger(0,bg,OBJPROP_YDISTANCE,22);
+   ObjectSetInteger(0,bg,OBJPROP_XSIZE,330);
+   ObjectSetInteger(0,bg,OBJPROP_YSIZE,PANEL_LINES*16+12);
+   ObjectSetInteger(0,bg,OBJPROP_BGCOLOR,C'16,20,30');
+   ObjectSetInteger(0,bg,OBJPROP_BORDER_TYPE,BORDER_FLAT);
+   ObjectSetInteger(0,bg,OBJPROP_BACK,false);
+   ApplyCommonProps(bg,clrDimGray);
+
+   for(int i=0; i<PANEL_LINES; i++)
+     {
+      string name = g_objPrefix+"PANEL_L"+IntegerToString(i);
+      if(ObjectFind(0,name)<0)
+         ObjectCreate(0,name,OBJ_LABEL,0,0,0);
+      ObjectSetInteger(0,name,OBJPROP_CORNER,CORNER_LEFT_UPPER);
+      ObjectSetInteger(0,name,OBJPROP_XDISTANCE,16);
+      ObjectSetInteger(0,name,OBJPROP_YDISTANCE,28+i*16);
+      ObjectSetString(0,name,OBJPROP_FONT,"Consolas");
+      ObjectSetInteger(0,name,OBJPROP_FONTSIZE,9);
+      ObjectSetString(0,name,OBJPROP_TEXT," ");
+      ApplyCommonProps(name,i==0 ? clrGold : clrWhiteSmoke);
+     }
+  }
+
+string StatusText()
+  {
+   if(g_isWeekend)
+      return "MARKET CLOSED (WEEKEND)";
+   if(FindOurPosition()>0)
+      return "IN TRADE";
+   if(g_tradesToday>0)
+      return "DONE FOR TODAY";
+   if(g_dayLocked)
+      return "NO TRADE TODAY";
+   switch(g_phase)
+     {
+      case PHASE_WAIT_SESSION:   return "WAITING ACCUMULATION";
+      case PHASE_BUILDING:       return "BUILDING ACCUMULATION";
+      case PHASE_WAIT_BREAKOUT:  return "WAITING BREAKOUT";
+      case PHASE_SIGNAL_PENDING: return "SIGNAL "+Side(g_signalDir)+" PENDING";
+      default:                   return "DONE";
+     }
+  }
+
+string TradeStatusText()
+  {
+   if(FindOurPosition()>0)
+     {
+      int dir = (PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY) ? 1 : -1;
+      return StringFormat("%s OPEN @ %s (%s)",Side(dir),Px(PositionGetDouble(POSITION_PRICE_OPEN)),
+                          DoubleToString(PositionGetDouble(POSITION_PROFIT),2));
+     }
+   return g_tradeStatus;
+  }
+
+void UpdatePanel()
+  {
+   if(!g_panelEnabled)
+      return;
+   datetime srvNow = (MQLInfoInteger(MQL_TESTER)!=0) ? TimeCurrent() : TimeTradeServer();
+   datetime nyNow  = ServerToNewYork(srvNow);
+   bool     haveAcc= (g_accHigh > 0.0 && g_accLow > 0.0);
+
+   double spreadPts = 0.0;
+   MqlTick tick;
+   if(SymbolInfoTick(_Symbol,tick))
+      spreadPts = PriceToPoints(tick.ask - tick.bid);
+
+   string lotsTxt = "-";
+   if(g_plan.lots > 0.0)
+      lotsTxt = Lots(g_plan.lots)+" (risk "+DoubleToString(g_plan.riskMoney,2)+")";
+   else if(g_estLots > 0.0)
+      lotsTxt = "~"+Lots(g_estLots)+" (estimated)";
+
+   string lines[PANEL_LINES];
+   lines[0]  = EA_TITLE;
+   lines[1]  = "Status: "+StatusText();
+   lines[2]  = "NY Time: "+TimeToString(nyNow,TIME_MINUTES)+"  ("+TimeToString(nyNow,TIME_DATE)+")";
+   lines[3]  = "Acc High: "+(haveAcc ? Px(g_accHigh) : "-");
+   lines[4]  = "Acc Low:  "+(haveAcc ? Px(g_accLow) : "-");
+   lines[5]  = "Range: "+(haveAcc ? Pts(g_accRangePts) : "-")+" pts (max "+Pts(MaxAccumulationPoints)+")";
+   lines[6]  = StringFormat("Risk: %.1f%% (%s)",RiskPercent,Money(DailyRiskBudget()));
+   lines[7]  = "Lots: "+lotsTxt;
+   lines[8]  = "Trade: "+TradeStatusText();
+   lines[9]  = StringFormat("Trades today: %d/%d",g_tradesToday,MAX_TRADES_PER_DAY);
+   lines[10] = "Daily P/L: "+Money(g_dailyPnL + FloatingPnL());
+   lines[11] = "Spread: "+Pts(spreadPts)+" pts (max "+Pts(MaxSpreadPoints)+")";
+   lines[12] = "Reason: "+(g_lastReason=="" ? "-" : g_lastReason);
+
+   for(int i=0; i<PANEL_LINES; i++)
+      ObjectSetString(0,g_objPrefix+"PANEL_L"+IntegerToString(i),OBJPROP_TEXT,lines[i]);
+   ChartRedraw(0);
+  }
+
+//+------------------------------------------------------------------+
+//| GESTIÓN DEL DÍA                                                  |
+//+------------------------------------------------------------------+
+void ResetDay(const datetime nyDay)
+  {
+   if(g_drawEnabled && !KeepPreviousDrawings && g_nyDay>0)
+      ObjectsDeleteAll(0,DayPrefix(g_nyDay));
+
+   g_nyDay       = nyDay;
+   g_srvDayStart = NewYorkToServer(nyDay);
+   g_srvAccStart = NewYorkToServer(nyDay + StartHour*3600    + StartMinute*60);
+   g_srvAccEnd   = NewYorkToServer(nyDay + AccumEndHour*3600 + AccumEndMinute*60);
+   g_srvTradeEnd = NewYorkToServer(nyDay + EndHour*3600      + EndMinute*60);
+
+   int dow = WeekDay(nyDay);
+   g_isWeekend      = (dow==0 || dow==6);
+   g_phase          = PHASE_WAIT_SESSION;
+   g_accBuilt       = false;
+   g_accValid       = false;
+   g_accHigh        = 0.0;
+   g_accLow         = 0.0;
+   g_accRangePts    = 0.0;
+   g_estLots        = 0.0;
+   g_tradesToday    = 0;
+   g_dayLocked      = false;
+   g_noTradeLogged  = false;
+   g_lastReason     = "";
+   g_lastCheckedBar = 0;
+   g_lastScanBarOpen= 0;
+   g_signalDir      = 0;
+   g_signalBarTime  = 0;
+   g_signalClose    = 0.0;
+   g_orderAttempts  = 0;
+   g_lastTransient  = "";
+   g_planActive     = false;
+   g_tpAdjusted     = false;
+   g_protectFails   = 0;
+   g_tradeStatus    = "NONE";
+   ZeroMemory(g_plan);
+   g_dayStartEquity = AccountInfoDouble(ACCOUNT_EQUITY);
+
+   //--- posición que sigue abierta (día anterior o reinicio del EA)
+   g_positionId = 0;
+   if(FindOurPosition()>0)
+      g_positionId = PositionGetInteger(POSITION_IDENTIFIER);
+
+   SyncTradesFromHistory();
+
+   PrintFormat("[NAE] Nuevo día NY %s | Acumulación (servidor) %s - %s | Fin de entradas %s | Equity inicial %s",
+               TimeToString(nyDay,TIME_DATE),TimeToString(g_srvAccStart,TIME_DATE|TIME_MINUTES),
+               TimeToString(g_srvAccEnd,TIME_MINUTES),TimeToString(g_srvTradeEnd,TIME_MINUTES),Money(g_dayStartEquity));
+
+   if(g_isWeekend)
+      LockDay("WEEKEND",false);
+   else if(g_tradesToday >= MAX_TRADES_PER_DAY)
+     {
+      g_tradeStatus = "ALREADY TRADED (restored)";
+      LockDay("ALREADY_TRADED",false);
+     }
+  }
+
+//--- cambio de día según la fecha de Nueva York
+bool DetectNewDay(const datetime srvNow)
+  {
+   datetime nyDay = DayStart(ServerToNewYork(srvNow));
+   if(nyDay==g_nyDay)
+      return false;
+   ResetDay(nyDay);
+   return true;
+  }
+
+//+------------------------------------------------------------------+
+//| ACUMULACIÓN                                                      |
+//+------------------------------------------------------------------+
+//--- actualización en vivo mientras se forma (sólo visual/panel)
+void UpdateLiveAccumulation(const datetime now)
+  {
+   MqlRates rates[];
+   int copied = CopyRates(_Symbol,SignalTimeframe,g_srvAccStart,now,rates);
+   if(copied<=0)
+      return;
+   double hi = -DBL_MAX, lo = DBL_MAX;
+   for(int i=0; i<copied; i++)
+     {
+      if(rates[i].time < g_srvAccStart || rates[i].time >= g_srvAccEnd)
+         continue;
+      hi = MathMax(hi,rates[i].high);
+      lo = MathMin(lo,rates[i].low);
+     }
+   if(hi<=0.0 || lo>=DBL_MAX)
+      return;
+   g_accHigh     = hi;
+   g_accLow      = lo;
+   g_accRangePts = PriceToPoints(hi-lo);
+   DrawAccumulation(hi,lo,g_accRangePts <= MaxAccumulationPoints + 1e-9);
+  }
+
+//--- construye la acumulación definitiva con las velas cerradas de la ventana
+//    devuelve false si debe reintentarse en el próximo tick (historial sincronizando)
+bool BuildAccumulation(const datetime now)
+  {
+   MqlRates rates[];
+   int copied   = CopyRates(_Symbol,SignalTimeframe,g_srvAccStart,g_srvAccEnd-1,rates);
+   int expected = (int)(((long)g_srvAccEnd - (long)g_srvAccStart)/g_tfSeconds);
+   int count    = 0;
+   double hi = -DBL_MAX, lo = DBL_MAX;
+   for(int i=0; i<copied; i++)
+     {
+      if(rates[i].time < g_srvAccStart || rates[i].time >= g_srvAccEnd)
+         continue;
+      hi = MathMax(hi,rates[i].high);
+      lo = MathMin(lo,rates[i].low);
+      count++;
+     }
+
+   if(count < expected)
+     {
+      // El historial puede tardar en sincronizar: se reintenta durante la primera vela posterior
+      if(now < g_srvAccEnd + g_tfSeconds)
+         return false;
+      g_accBuilt = true;
+      g_accValid = false;
+      PrintFormat("[NAE] Acumulación incompleta: %d de %d velas encontradas",count,expected);
+      LockDay("ACCUMULATION_INCOMPLETE");
+      return true;
+     }
+
+   g_accBuilt       = true;
+   g_accHigh        = hi;
+   g_accLow         = lo;
+   g_accRangePts    = PriceToPoints(hi-lo);
+   g_accValid       = (hi > lo && g_accRangePts <= MaxAccumulationPoints + 1e-9);
+   g_lastCheckedBar = g_srvAccEnd - g_tfSeconds; // última vela de la acumulación
+
+   PrintFormat("[NAE] Acumulación %s NY: high=%s low=%s rango=%s pts (máx %s) => %s",
+               TimeToString(g_nyDay,TIME_DATE),Px(hi),Px(lo),Pts(g_accRangePts),Pts(MaxAccumulationPoints),
+               g_accValid ? "VÁLIDA" : "INVÁLIDA");
+   DrawAccumulation(hi,lo,g_accValid);
+
+   if(!g_accValid)
+     {
+      LockDay("INVALID_RANGE");
+      return true;
+     }
+
+   // Lotaje estimado para el panel (supone entrada LONG en el máximo)
+   double budget = 0.0, risk = 0.0;
+   string why    = "";
+   g_estLots = CalculatePositionSize(1,hi,CalculateStopLoss(1),budget,risk,why);
+   return true;
+  }
+
+//+------------------------------------------------------------------+
+//| RIESGO: SL, TP Y LOTAJE                                          |
+//+------------------------------------------------------------------+
+//--- SL al otro lado de la acumulación + buffer, redondeado alejándose del precio
+double CalculateStopLoss(const int dir)
+  {
+   double buffer = PointsToPrice(SL_Buffer_Points);
+   if(dir > 0)
+      return FloorToTick(g_accLow - buffer);
+   return CeilToTick(g_accHigh + buffer);
+  }
+
+//--- TP = entrada +/- RiskReward x distancia real entrada-SL (redondeo que garantiza >= R:R)
+double CalculateTakeProfit(const int dir,const double entry,const double sl)
+  {
+   double risk = MathAbs(entry - sl);
+   if(dir > 0)
+      return CeilToTick(entry + RiskReward*risk);
+   return FloorToTick(entry - RiskReward*risk);
+  }
+
+//--- presupuesto de riesgo del día: RiskPercent del equity (nunca mayor que el equity del inicio del día)
+double DailyRiskBudget()
+  {
+   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+   double base   = (g_dayStartEquity > 0.0) ? MathMin(equity,g_dayStartEquity) : equity;
+   return MathMax(0.0,base*RiskPercent/100.0);
+  }
+
+//--- pérdida monetaria de 1 lote si se toca el SL (el mayor de dos métodos, conservador)
+double LossPerLot(const int dir,const double entry,const double sl)
+  {
+   double distance  = MathAbs(entry - sl);
+   double tickValue = SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_VALUE_LOSS);
+   if(tickValue <= 0.0)
+      tickValue = SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_VALUE);
+   double byTick = (tickValue > 0.0 && g_tickSize > 0.0) ? distance/g_tickSize*tickValue : 0.0;
+
+   double profit = 0.0, byCalc = 0.0;
+   if(OrderCalcProfit(dir > 0 ? ORDER_TYPE_BUY : ORDER_TYPE_SELL,_Symbol,1.0,entry,sl,profit))
+      byCalc = MathAbs(profit);
+   return MathMax(byTick,byCalc);
+  }
+
+//--- lotaje = riesgo / pérdida por lote, redondeado HACIA ABAJO al step del broker
+double CalculatePositionSize(const int dir,const double entry,const double sl,
+                             double &budget,double &riskMoney,string &why)
+  {
+   budget    = DailyRiskBudget();
+   riskMoney = 0.0;
+   if(MathAbs(entry - sl) <= 0.0 || budget <= 0.0)
+     {
+      why = "distancia al SL o presupuesto de riesgo inválidos";
+      return 0.0;
+     }
+   double lossPerLot = LossPerLot(dir,entry,sl);
+   if(lossPerLot <= 0.0)
+     {
+      why = "no se pudo calcular el valor del tick del símbolo";
+      return 0.0;
+     }
+   double rawLots = budget/lossPerLot;
+   double lots    = NormalizeDouble(MathFloor(rawLots/g_volStep + 1e-9)*g_volStep,g_volDigits);
+   if(lots < g_volMin - 1e-12)
+     {
+      why = StringFormat("lote calculado %.4f < mínimo %s (redondear arriba superaría el riesgo)",rawLots,Lots(g_volMin));
+      return 0.0;
+     }
+   if(lots > g_volMax + 1e-12)
+     {
+      why = StringFormat("lote calculado %s > máximo %s",Lots(lots),Lots(g_volMax));
+      return 0.0;
+     }
+   double volLimit = SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_LIMIT);
+   if(volLimit > 0.0 && lots > volLimit + 1e-12)
+     {
+      why = StringFormat("lote calculado %s > límite de volumen %s",Lots(lots),Lots(volLimit));
+      return 0.0;
+     }
+   riskMoney = lots*lossPerLot;
+   return lots;
+  }
+
+bool TradingAllowed(const int dir)
+  {
+   if(TerminalInfoInteger(TERMINAL_TRADE_ALLOWED)==0 || MQLInfoInteger(MQL_TRADE_ALLOWED)==0)
+      return false;
+   if(AccountInfoInteger(ACCOUNT_TRADE_ALLOWED)==0 || AccountInfoInteger(ACCOUNT_TRADE_EXPERT)==0)
+      return false;
+   ENUM_SYMBOL_TRADE_MODE mode = (ENUM_SYMBOL_TRADE_MODE)SymbolInfoInteger(_Symbol,SYMBOL_TRADE_MODE);
+   if(mode==SYMBOL_TRADE_MODE_FULL)
+      return true;
+   if(mode==SYMBOL_TRADE_MODE_LONGONLY && dir > 0)
+      return true;
+   if(mode==SYMBOL_TRADE_MODE_SHORTONLY && dir < 0)
+      return true;
+   return false;
+  }
+
+bool ValidateStops(const TradePlan &plan,const MqlTick &tick,string &reason)
+  {
+   double stopsLevel = (double)SymbolInfoInteger(_Symbol,SYMBOL_TRADE_STOPS_LEVEL)*_Point;
+   if(plan.direction > 0)
+     {
+      if(plan.sl <= 0.0 || plan.entry - plan.sl <= 0.0 || tick.bid - plan.sl <= stopsLevel)
+        { reason = "INVALID_SL"; return false; }
+      if(plan.tp - tick.bid <= stopsLevel)
+        { reason = "INVALID_TP"; return false; }
+     }
+   else
+     {
+      if(plan.sl - plan.entry <= 0.0 || plan.sl - tick.ask <= stopsLevel)
+        { reason = "INVALID_SL"; return false; }
+      if(plan.tp <= 0.0 || tick.ask - plan.tp <= stopsLevel)
+        { reason = "INVALID_TP"; return false; }
+     }
+   return true;
+  }
+
+bool CheckOrderRequest(const TradePlan &plan,string &reason)
+  {
+   MqlTradeRequest     req;
+   MqlTradeCheckResult chk;
+   ZeroMemory(req);
+   ZeroMemory(chk);
+   req.action       = TRADE_ACTION_DEAL;
+   req.symbol       = _Symbol;
+   req.magic        = MagicNumber;
+   req.volume       = plan.lots;
+   req.type         = (plan.direction > 0) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+   req.price        = plan.entry;
+   req.sl           = plan.sl;
+   req.tp           = plan.tp;
+   req.deviation    = g_deviation;
+   req.type_filling = g_filling;
+   req.type_time    = ORDER_TIME_GTC;
+   if(OrderCheck(req,chk))
+      return true;
+   reason = (chk.retcode==TRADE_RETCODE_NO_MONEY) ? "INSUFFICIENT_MARGIN" : "ORDER_CHECK_FAILED";
+   PrintFormat("[NAE] OrderCheck rechazó la orden: retcode=%u (%s)",chk.retcode,chk.comment);
+   return false;
+  }
+
+int BreakoutDirection(const double barClose)
+  {
+   if(barClose - g_accHigh > g_tickSize*0.5)
+      return 1;   // cierre por encima del máximo
+   if(g_accLow - barClose > g_tickSize*0.5)
+      return -1;  // cierre por debajo del mínimo
+   return 0;
+  }
+
+//--- los 10 filtros de seguridad; rellena el plan de la operación si todo es correcto
+bool CheckRiskConditions(const int dir,const datetime now,TradePlan &plan,string &reason)
+  {
+   ZeroMemory(plan);
+   plan.direction = dir;
+
+   // 1. Horario permitido
+   if(now < g_srvAccEnd || now >= g_srvTradeEnd)
+     { reason = "OUTSIDE_SESSION"; return false; }
+   // 2. Acumulación formada
+   if(!g_accBuilt)
+     { reason = "ACCUMULATION_NOT_READY"; return false; }
+   // 3. Rango dentro del máximo
+   if(!g_accValid)
+     { reason = "INVALID_RANGE"; return false; }
+   // 4. Operaciones de hoy / límite diario
+   if(g_tradesToday >= MAX_TRADES_PER_DAY)
+     { reason = "ALREADY_TRADED"; return false; }
+   double budget = DailyRiskBudget();
+   if(budget > 0.0 && g_dailyPnL <= -budget)
+     { reason = "DAILY_LIMIT_REACHED"; return false; }
+   // 5. Posición abierta del EA (o cualquiera en cuentas netting)
+   if(FindOurPosition()>0 || (!g_isHedging && AnyPositionOnSymbol()))
+     { reason = "POSITION_EXISTS"; return false; }
+   if(!TradingAllowed(dir))
+     { reason = "TRADING_DISABLED"; return false; }
+   // 6. Spread
+   MqlTick tick;
+   if(!SymbolInfoTick(_Symbol,tick) || tick.ask <= 0.0 || tick.bid <= 0.0)
+     { reason = "NO_PRICE"; return false; }
+   if(PriceToPoints(tick.ask - tick.bid) > MaxSpreadPoints + 1e-9)
+     { reason = "SPREAD_TOO_HIGH"; return false; }
+   // 7. Stop Loss (y TP derivado)
+   plan.entry = (dir > 0) ? tick.ask : tick.bid;
+   plan.sl    = CalculateStopLoss(dir);
+   plan.tp    = CalculateTakeProfit(dir,plan.entry,plan.sl);
+   if(!ValidateStops(plan,tick,reason))
+      return false;
+   // 8. Lotaje
+   string why = "";
+   double riskBudget = 0.0, riskMoney = 0.0;
+   plan.lots       = CalculatePositionSize(dir,plan.entry,plan.sl,riskBudget,riskMoney,why);
+   plan.riskBudget = riskBudget;
+   plan.riskMoney  = riskMoney;
+   if(plan.lots <= 0.0)
+     {
+      PrintFormat("[NAE] Lotaje inválido: %s",why);
+      reason = "INVALID_LOT_SIZE";
+      return false;
+     }
+   // 9. Margen
+   double margin = 0.0;
+   if(!OrderCalcMargin(dir > 0 ? ORDER_TYPE_BUY : ORDER_TYPE_SELL,_Symbol,plan.lots,plan.entry,margin)
+      || margin > AccountInfoDouble(ACCOUNT_MARGIN_FREE))
+     { reason = "INSUFFICIENT_MARGIN"; return false; }
+   if(!CheckOrderRequest(plan,reason))
+      return false;
+   // 10. Ruptura: la vela de señal cerró fuera de la zona en la dirección de la orden
+   if(BreakoutDirection(g_signalClose)!=dir)
+     { reason = "NO_VALID_BREAKOUT"; return false; }
+
+   reason = (dir > 0) ? "CLOSE_ABOVE_ACC_HIGH" : "CLOSE_BELOW_ACC_LOW";
+   return true;
+  }
+
+bool IsTransientReason(const string reason)
+  {
+   return (reason=="SPREAD_TOO_HIGH" || reason=="NO_PRICE" || reason=="TRADING_DISABLED");
+  }
+
+bool IsTransientRetcode(const uint rc)
+  {
+   return (rc==TRADE_RETCODE_REQUOTE       || rc==TRADE_RETCODE_REJECT      ||
+           rc==TRADE_RETCODE_PRICE_CHANGED || rc==TRADE_RETCODE_PRICE_OFF   ||
+           rc==TRADE_RETCODE_TIMEOUT       || rc==TRADE_RETCODE_CONNECTION  ||
+           rc==TRADE_RETCODE_TOO_MANY_REQUESTS);
+  }
+
+//+------------------------------------------------------------------+
+//| EJECUCIÓN                                                        |
+//+------------------------------------------------------------------+
+void OnPositionOpened(const TradePlan &plan,const double fillPrice)
+  {
+   if(g_tradesToday < 1)
+      g_tradesToday = 1;
+   g_dayLocked   = true;          // regla fundamental: sin más entradas hoy
+   g_signalDir   = 0;
+   g_phase       = PHASE_DONE;
+   g_plan        = plan;
+   g_planActive  = true;
+   g_tpAdjusted  = false;
+   g_protectFails= 0;
+   g_entryTime   = TimeCurrent();
+   g_lastReason  = (plan.direction > 0) ? "CLOSE_ABOVE_ACC_HIGH" : "CLOSE_BELOW_ACC_LOW";
+   g_tradeStatus = Side(plan.direction)+" OPEN";
+
+   if(fillPrice > 0.0)
+     {
+      g_plan.entry     = fillPrice;
+      g_plan.riskMoney = plan.lots*LossPerLot(plan.direction,fillPrice,plan.sl); // riesgo real tras el fill
+     }
+   if(FindOurPosition()>0)
+      g_positionId = PositionGetInteger(POSITION_IDENTIFIER);
+
+   LogEvent("TRADE_OPEN",plan.direction,g_plan.entry,g_plan.sl,g_plan.tp,g_plan.lots,g_plan.riskMoney,
+            "OPEN",0.0,g_lastReason);
+   PrintFormat("[NAE] Riesgo permitido %s | riesgo real %s (%.2f%% del equity)",
+               Money(plan.riskBudget),Money(g_plan.riskMoney),
+               100.0*g_plan.riskMoney/MathMax(AccountInfoDouble(ACCOUNT_EQUITY),1e-9));
+   DrawTradeLevels(plan.direction,g_plan.entry,g_plan.sl,g_plan.tp,g_entryTime);
+   EnsureProtection();
+  }
+
+//--- envía la orden de mercado con SL/TP y verifica la ejecución
+bool SendMarketOrder(const TradePlan &plan,bool &fatal)
+  {
+   fatal = false;
+   string comment = "NAE "+Side(plan.direction);
+   ResetLastError();
+   bool sent = (plan.direction > 0)
+               ? g_trade.Buy(plan.lots,_Symbol,plan.entry,plan.sl,plan.tp,comment)
+               : g_trade.Sell(plan.lots,_Symbol,plan.entry,plan.sl,plan.tp,comment);
+   uint rc   = g_trade.ResultRetcode();
+   bool ok   = sent && (rc==TRADE_RETCODE_DONE || rc==TRADE_RETCODE_DONE_PARTIAL || rc==TRADE_RETCODE_PLACED);
+   if(ok)
+     {
+      OnPositionOpened(plan,g_trade.ResultPrice());
+      return true;
+     }
+
+   PrintFormat("[NAE] ERROR al abrir %s %s lotes: retcode=%u (%s) | error=%d",
+               Side(plan.direction),Lots(plan.lots),rc,g_trade.ResultRetcodeDescription(),GetLastError());
+   // Una respuesta perdida pudo abrir la posición igualmente: se verifica antes de reintentar
+   SyncTradesFromHistory();
+   if(FindOurPosition()>0 || g_tradesToday>0)
+     {
+      Print("[NAE] La posición existe a pesar del error: se registra y no se reintenta.");
+      OnPositionOpened(plan,0.0);
+      return true;
+     }
+   fatal = !IsTransientRetcode(rc);
+   return false;
+  }
+
+bool OpenBuy(const TradePlan &plan,bool &fatal)
+  {
+   fatal = true;
+   if(plan.direction <= 0)
+      return false;
+   return SendMarketOrder(plan,fatal);
+  }
+
+bool OpenSell(const TradePlan &plan,bool &fatal)
+  {
+   fatal = true;
+   if(plan.direction >= 0)
+      return false;
+   return SendMarketOrder(plan,fatal);
+  }
+
+//--- ejecuta la ruptura pendiente (reintenta sólo ante causas transitorias)
+void TryExecuteSignal(const datetime now)
+  {
+   TradePlan plan;
+   string    reason = "";
+   if(!CheckRiskConditions(g_signalDir,now,plan,reason))
+     {
+      if(IsTransientReason(reason))
+        {
+         if(reason!=g_lastTransient)
+            PrintFormat("[NAE] Entrada %s en espera: %s (se reintenta hasta el cierre de la vela actual)",
+                        Side(g_signalDir),reason);
+         g_lastTransient = reason;
+         return;
+        }
+      LockDay(reason);
+      return;
+     }
+
+   g_orderAttempts++;
+   bool fatal = false;
+   bool done  = (plan.direction > 0) ? OpenBuy(plan,fatal) : OpenSell(plan,fatal);
+   if(done)
+      return;
+   if(fatal || g_orderAttempts >= MAX_ORDER_ATTEMPTS)
+      LockDay("ORDER_FAILED");
+   else
+      g_lastTransient = "ORDER_FAILED";
+  }
+
+//--- garantiza SL/TP en la posición y ajusta el TP al precio real de entrada
+void EnsureProtection()
+  {
+   ulong ticket = FindOurPosition();
+   if(ticket==0)
+      return;
+   int    dir  = (PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY) ? 1 : -1;
+   double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+   double sl   = PositionGetDouble(POSITION_SL);
+   double tp   = PositionGetDouble(POSITION_TP);
+
+   double wantSl = sl;
+   if(wantSl <= 0.0)
+     {
+      if(g_planActive)
+         wantSl = g_plan.sl;
+      else if(g_accBuilt && g_accHigh > 0.0)
+         wantSl = CalculateStopLoss(dir);
+     }
+   if(wantSl <= 0.0)
+      return; // posición restaurada sin datos para reconstruir el SL (se avisa en OnInit)
+
+   bool   adjustTp = (tp <= 0.0) || (g_planActive && !g_tpAdjusted);
+   double wantTp   = adjustTp ? CalculateTakeProfit(dir,openPrice,wantSl) : tp;
+   bool   needSl   = (sl <= 0.0);
+   bool   needTp   = adjustTp && MathAbs(wantTp - tp) >= g_tickSize*0.5;
+   if(!needSl && !needTp)
+     {
+      g_tpAdjusted = true;
+      return;
+     }
+
+   if(g_trade.PositionModify(ticket,wantSl,wantTp) && g_trade.ResultRetcode()==TRADE_RETCODE_DONE)
+     {
+      g_tpAdjusted   = true;
+      g_protectFails = 0;
+      if(g_planActive)
+        {
+         g_plan.entry = openPrice;
+         g_plan.sl    = wantSl;
+         g_plan.tp    = wantTp;
+         DrawTradeLevels(dir,openPrice,wantSl,wantTp,g_entryTime > 0 ? g_entryTime : TimeCurrent());
+        }
+      PrintFormat("[NAE] Protección fijada: entrada real %s SL=%s TP=%s (R:R 1:%.2f)",Px(openPrice),Px(wantSl),Px(wantTp),RiskReward);
+      return;
+     }
+
+   g_protectFails++;
+   PrintFormat("[NAE] ERROR al fijar SL/TP (intento %d/%d): retcode=%u (%s)",g_protectFails,MAX_PROTECT_ATTEMPTS,
+               g_trade.ResultRetcode(),g_trade.ResultRetcodeDescription());
+   if(g_protectFails < MAX_PROTECT_ATTEMPTS)
+      return;
+   if(needSl)
+     {
+      // Una posición sin Stop Loss viola la gestión de riesgo: se cierra
+      Print("[NAE] CRÍTICO: no se pudo colocar el Stop Loss. Cerrando la posición por seguridad.");
+      if(!g_trade.PositionClose(ticket))
+         PrintFormat("[NAE] ERROR al cerrar la posición sin SL: retcode=%u (%s)",g_trade.ResultRetcode(),g_trade.ResultRetcodeDescription());
+      g_lastReason = "PROTECTION_FAILED";
+     }
+   else
+      g_tpAdjusted = true; // se conserva el TP enviado con la orden
+  }
+
+//+------------------------------------------------------------------+
+//| RUPTURA                                                          |
+//+------------------------------------------------------------------+
+//--- evalúa cada vela cerrada desde la acumulación. Sólo la ÚLTIMA vela cerrada puede
+//    generar entrada: una ruptura anterior no aprovechada (EA reiniciado) bloquea el día.
+void CheckBreakout(const datetime now)
+  {
+   if(g_signalDir!=0)
+     {
+      // La señal sólo es ejecutable durante la vela siguiente a la ruptura
+      if(now >= g_signalBarTime + 2*g_tfSeconds)
+        {
+         LockDay(g_lastTransient!="" ? g_lastTransient : "BREAKOUT_EXPIRED");
+         return;
+        }
+      TryExecuteSignal(now);
+      return;
+     }
+
+   datetime barOpen = iTime(_Symbol,SignalTimeframe,0);
+   if(barOpen==0)
+      return;
+   if(barOpen==g_lastScanBarOpen)
+     {
+      if(now >= g_srvTradeEnd)
+         LockDay("NO_VALID_BREAKOUT");
+      return;
+     }
+
+   MqlRates rates[];
+   int copied = CopyRates(_Symbol,SignalTimeframe,g_lastCheckedBar+1,now,rates);
+   if(copied < 0)
+     {
+      if(now >= g_srvTradeEnd)
+         LockDay("NO_VALID_BREAKOUT");
+      return; // historial no disponible: se reintenta en el próximo tick
+     }
+   g_lastScanBarOpen = barOpen;
+
+   int latest = -1;
+   for(int i=0; i<copied; i++)
+      if(rates[i].time > g_lastCheckedBar && rates[i].time + g_tfSeconds <= now)
+         latest = i;
+
+   for(int i=0; i<=latest; i++)
+     {
+      if(rates[i].time <= g_lastCheckedBar)
+         continue;
+      g_lastCheckedBar = rates[i].time;
+      int dir = BreakoutDirection(rates[i].close);
+      if(dir==0)
+         continue;
+
+      if(rates[i].time + g_tfSeconds > g_srvTradeEnd || now >= g_srvTradeEnd)
+        {
+         LockDay("OUTSIDE_SESSION");
+         return;
+        }
+      if(i!=latest || now >= rates[i].time + 2*g_tfSeconds)
+        {
+         LockDay("BREAKOUT_MISSED");
+         return;
+        }
+
+      g_signalDir     = dir;
+      g_signalBarTime = rates[i].time;
+      g_signalClose   = rates[i].close;
+      g_orderAttempts = 0;
+      g_lastTransient = "";
+      g_phase         = PHASE_SIGNAL_PENDING;
+      PrintFormat("[NAE] Ruptura %s: vela %s NY cerró en %s (acc high %s / low %s)",
+                  Side(dir),TimeToString(ServerToNewYork(rates[i].time),TIME_MINUTES),Px(rates[i].close),
+                  Px(g_accHigh),Px(g_accLow));
+      TryExecuteSignal(now);
+      return;
+     }
+
+   if(now >= g_srvTradeEnd)
+      LockDay("NO_VALID_BREAKOUT");
+  }
+
+//+------------------------------------------------------------------+
+//| MÁQUINA DE ESTADOS DIARIA                                        |
+//+------------------------------------------------------------------+
+void ProcessStrategy(const datetime now)
+  {
+   if(g_isWeekend)
+      return;
+   if(now < g_srvAccStart)
+     {
+      g_phase = PHASE_WAIT_SESSION;
+      return;
+     }
+   if(!g_accBuilt)
+     {
+      if(now < g_srvAccEnd)
+        {
+         g_phase = PHASE_BUILDING;
+         if(g_drawEnabled || g_panelEnabled)
+            UpdateLiveAccumulation(now);
+         return;
+        }
+      if(!BuildAccumulation(now))
+         return;
+     }
+   if(g_dayLocked)
+     {
+      g_phase = PHASE_DONE;
+      return;
+     }
+   g_phase = (g_signalDir!=0) ? PHASE_SIGNAL_PENDING : PHASE_WAIT_BREAKOUT;
+   CheckBreakout(now);
+  }
+
+//+------------------------------------------------------------------+
+//| VALIDACIONES DE INICIO                                           |
+//+------------------------------------------------------------------+
+bool ValidClock(const int h,const int m) { return (h>=0 && h<=23 && m>=0 && m<=59); }
+
+bool ValidateInputs()
+  {
+   bool ok = true;
+   if(!ValidClock(StartHour,StartMinute) || !ValidClock(AccumEndHour,AccumEndMinute) || !ValidClock(EndHour,EndMinute))
+     { Print("[NAE] Horario inválido: horas 0-23 y minutos 0-59."); ok = false; }
+   int startMin  = StartHour*60 + StartMinute;
+   int accEndMin = AccumEndHour*60 + AccumEndMinute;
+   int endMin    = EndHour*60 + EndMinute;
+   if(!(startMin < accEndMin && accEndMin < endMin))
+     { Print("[NAE] Debe cumplirse Start < AccumEnd < End (hora NY)."); ok = false; }
+   int tfMin = PeriodSeconds(SignalTimeframe)/60;
+   if(tfMin<=0 || startMin%tfMin!=0 || accEndMin%tfMin!=0 || endMin%tfMin!=0)
+     { PrintFormat("[NAE] Los horarios deben coincidir con aperturas de vela de %d minutos.",tfMin); ok = false; }
+   if(RiskPercent <= 0.0 || RiskPercent > 100.0)
+     { Print("[NAE] RiskPercent debe estar entre 0 y 100."); ok = false; }
+   if(RiskReward <= 0.0)
+     { Print("[NAE] RiskReward debe ser mayor que 0."); ok = false; }
+   if(MaxAccumulationPoints <= 0.0)
+     { Print("[NAE] MaxAccumulationPoints debe ser mayor que 0."); ok = false; }
+   if(SL_Buffer_Points < 0.0)
+     { Print("[NAE] SL_Buffer_Points no puede ser negativo."); ok = false; }
+   if(MaxSpreadPoints <= 0.0)
+     { Print("[NAE] MaxSpreadPoints debe ser mayor que 0."); ok = false; }
+   if(Slippage < 0.0)
+     { Print("[NAE] Slippage no puede ser negativo."); ok = false; }
+   if(ServerGMTOffset < -12 || ServerGMTOffset > 14)
+     { Print("[NAE] ServerGMTOffset fuera de rango (-12..14)."); ok = false; }
+   if(MagicNumber==0)
+     { Print("[NAE] MagicNumber no puede ser 0 (se confundiría con operaciones manuales)."); ok = false; }
+   if(ok && RiskPercent > 5.0)
+      PrintFormat("[NAE] ADVERTENCIA: RiskPercent=%.1f%% es un riesgo MUY alto por operación.",RiskPercent);
+   return ok;
+  }
+
+void CheckTimezoneSetup(const bool tester)
+  {
+   datetime srv = TimeCurrent();
+   PrintFormat("[NAE] Zona horaria: servidor GMT%+d en invierno, DST=%s | servidor %s => Nueva York %s",
+               ServerGMTOffset,EnumToString(ServerDSTMode),TimeToString(srv,TIME_DATE|TIME_MINUTES),
+               TimeToString(ServerToNewYork(srv),TIME_DATE|TIME_MINUTES));
+   if(tester)
+     {
+      Print("[NAE] Strategy Tester: TimeGMT() no es fiable en el tester; se usa ServerGMTOffset/ServerDSTMode.");
+      return;
+     }
+   long actual = (long)TimeTradeServer() - (long)TimeGMT();
+   actual      = (long)MathRound(actual/1800.0)*1800;
+   long model  = ServerOffsetSeconds(TimeGMT());
+   if(actual!=model)
+     {
+      string msg = StringFormat("NAE: el servidor está en GMT%+.1f pero la configuración indica GMT%+.1f. Revise ServerGMTOffset/ServerDSTMode.",
+                                actual/3600.0,model/3600.0);
+      Print("[NAE] ADVERTENCIA: ",msg);
+      Alert(msg);
+     }
+  }
+
+void CheckSymbol()
+  {
+   string name = _Symbol;
+   StringToUpper(name);
+   if(StringFind(name,"NAS")<0 && StringFind(name,"US100")<0 && StringFind(name,"USTEC")<0
+      && StringFind(name,"NDX")<0 && StringFind(name,"NQ")<0 && StringFind(name,"TECH100")<0)
+      PrintFormat("[NAE] ADVERTENCIA: '%s' no parece ser el NASDAQ 100.",_Symbol);
+   if(_Period!=SignalTimeframe)
+      PrintFormat("[NAE] Aviso: el gráfico es %s; la estrategia calcula sobre %s.",EnumToString(_Period),EnumToString(SignalTimeframe));
+   PrintFormat("[NAE] Símbolo %s: digits=%d point=%s tickSize=%s tickValue=%s contrato=%s volMin=%s volMax=%s step=%s stopsLevel=%d %s",
+               _Symbol,_Digits,DoubleToString(_Point,_Digits),DoubleToString(g_tickSize,_Digits),
+               DoubleToString(SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_VALUE),5),
+               DoubleToString(SymbolInfoDouble(_Symbol,SYMBOL_TRADE_CONTRACT_SIZE),2),
+               Lots(g_volMin),Lots(g_volMax),Lots(g_volStep),
+               (int)SymbolInfoInteger(_Symbol,SYMBOL_TRADE_STOPS_LEVEL),g_isHedging ? "HEDGING" : "NETTING");
+   PrintFormat("[NAE] 1 punto de input = %s de precio | MaxAccumulation=%s SL_Buffer=%s MaxSpread=%s Deviation=%d puntos MT5",
+               DoubleToString(g_unit,_Digits),Pts(MaxAccumulationPoints),Pts(SL_Buffer_Points),Pts(MaxSpreadPoints),(int)g_deviation);
+  }
+
+//+------------------------------------------------------------------+
+//| EVENTOS                                                          |
+//+------------------------------------------------------------------+
+int OnInit()
+  {
+   if(!ValidateInputs())
+      return INIT_PARAMETERS_INCORRECT;
+
+   g_tickSize = SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE);
+   if(g_tickSize <= 0.0)
+      g_tickSize = _Point;
+   g_volMin  = SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MIN);
+   g_volMax  = SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MAX);
+   g_volStep = SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_STEP);
+   if(g_volMin <= 0.0 || g_volMax <= 0.0 || g_volStep <= 0.0)
+     {
+      Print("[NAE] Especificaciones de volumen del símbolo no disponibles.");
+      return INIT_FAILED;
+     }
+   g_volDigits = VolumeDigits(g_volStep);
+   g_unit      = (PointUnit==UNIT_INDEX_POINTS) ? 1.0 : _Point;
+   g_tfSeconds = PeriodSeconds(SignalTimeframe);
+   g_isHedging = ((ENUM_ACCOUNT_MARGIN_MODE)AccountInfoInteger(ACCOUNT_MARGIN_MODE)==ACCOUNT_MARGIN_MODE_RETAIL_HEDGING);
+   g_filling   = ResolveFilling();
+   g_deviation = (ulong)MathRound(PointsToPrice(Slippage)/_Point);
+
+   g_trade.SetExpertMagicNumber(MagicNumber);
+   g_trade.SetDeviationInPoints(g_deviation);
+   g_trade.SetTypeFilling(g_filling);
+   g_trade.SetMarginMode();
+   g_trade.LogLevel(LOG_LEVEL_ERRORS);
+
+   bool tester  = (MQLInfoInteger(MQL_TESTER)!=0);
+   bool visual  = (MQLInfoInteger(MQL_VISUAL_MODE)!=0);
+   g_drawEnabled  = DrawObjects && (!tester || visual);
+   g_panelEnabled = ShowPanel && (!tester || visual);
+   g_csvEnabled   = WriteCSVLog && MQLInfoInteger(MQL_OPTIMIZATION)==0;
+   g_objPrefix    = "NAE_"+IntegerToString((long)MagicNumber)+"_";
+
+   //--- el estado se reconstruye en el primer tick (las globales sobreviven a un cambio de parámetros)
+   g_nyDay        = 0;
+   g_positionId   = 0;
+   g_planActive   = false;
+   ZeroMemory(g_plan);
+
+   CheckTimezoneSetup(tester);
+   CheckSymbol();
+   iTime(_Symbol,SignalTimeframe,0); // fuerza la sincronización del historial del timeframe
+
+   if(FindOurPosition()>0 && PositionGetDouble(POSITION_SL) <= 0.0)
+      Print("[NAE] ADVERTENCIA: existe una posición del EA SIN Stop Loss. Se intentará colocarlo cuando haya acumulación.");
+
+   if(g_panelEnabled)
+     {
+      CreatePanel();
+      if(!tester)
+         EventSetTimer(1);
+     }
+   PrintFormat("[NAE] Iniciado: Risk=%.2f%% RR=1:%.2f MaxAcc=%s SL_Buffer=%s MaxSpread=%s Magic=%s | Sesión NY %02d:%02d, acumulación hasta %02d:%02d, entradas hasta %02d:%02d",
+               RiskPercent,RiskReward,Pts(MaxAccumulationPoints),Pts(SL_Buffer_Points),Pts(MaxSpreadPoints),
+               IntegerToString((long)MagicNumber),StartHour,StartMinute,AccumEndHour,AccumEndMinute,EndHour,EndMinute);
+   return INIT_SUCCEEDED;
+  }
+
+void OnDeinit(const int reason)
+  {
+   EventKillTimer();
+   if(g_objPrefix=="")
+      return;
+   ObjectsDeleteAll(0,g_objPrefix+"PANEL_");
+   if(reason==REASON_REMOVE)
+      ObjectsDeleteAll(0,g_objPrefix);
+   ChartRedraw(0);
+  }
+
+void OnTick()
+  {
+   datetime now = TimeCurrent();
+   if(now<=0)
+      return;
+   DetectNewDay(now);
+   EnsureProtection();
+   ProcessStrategy(now);
+   if(g_panelEnabled && now!=g_lastPanelUpdate)
+     {
+      g_lastPanelUpdate = now;
+      UpdatePanel();
+     }
+  }
+
+void OnTimer()
+  {
+   UpdatePanel();
+  }
+
+//--- registro de apertura/cierre y resultado de la operación
+void OnTradeTransaction(const MqlTradeTransaction &trans,const MqlTradeRequest &request,const MqlTradeResult &result)
+  {
+   if(trans.type!=TRADE_TRANSACTION_DEAL_ADD || trans.deal==0)
+      return;
+   if(!HistoryDealSelect(trans.deal) || !IsOurDeal(trans.deal))
+      return;
+
+   ENUM_DEAL_ENTRY entry = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(trans.deal,DEAL_ENTRY);
+   if(entry==DEAL_ENTRY_IN)
+     {
+      // Bloqueo inmediato aunque la respuesta de OrderSend se haya perdido
+      if(g_tradesToday < 1)
+         g_tradesToday = 1;
+      g_dayLocked   = true;
+      g_signalDir   = 0;
+      g_positionId  = HistoryDealGetInteger(trans.deal,DEAL_POSITION_ID);
+      return;
+     }
+   if(entry!=DEAL_ENTRY_OUT && entry!=DEAL_ENTRY_OUT_BY && entry!=DEAL_ENTRY_INOUT)
+      return;
+
+   long            posId      = HistoryDealGetInteger(trans.deal,DEAL_POSITION_ID);
+   double          closePrice = HistoryDealGetDouble(trans.deal,DEAL_PRICE);
+   datetime        closeTime  = (datetime)HistoryDealGetInteger(trans.deal,DEAL_TIME);
+   ENUM_DEAL_REASON why       = (ENUM_DEAL_REASON)HistoryDealGetInteger(trans.deal,DEAL_REASON);
+
+   //--- resultado neto de toda la posición (entrada + salida, comisiones y swap)
+   double net = 0.0, entryPrice = 0.0, volume = 0.0;
+   int    dir = 0;
+   if(HistorySelectByPosition(posId))
+     {
+      int total = HistoryDealsTotal();
+      for(int i=0; i<total; i++)
+        {
+         ulong deal = HistoryDealGetTicket(i);
+         if(deal==0)
+            continue;
+         net += DealNet(deal);
+         if((ENUM_DEAL_ENTRY)HistoryDealGetInteger(deal,DEAL_ENTRY)==DEAL_ENTRY_IN)
+           {
+            dir        = (HistoryDealGetInteger(deal,DEAL_TYPE)==DEAL_TYPE_BUY) ? 1 : -1;
+            entryPrice = HistoryDealGetDouble(deal,DEAL_PRICE);
+            volume     = HistoryDealGetDouble(deal,DEAL_VOLUME);
+           }
+        }
+     }
+   SyncTradesFromHistory(); // actualiza el resultado diario
+
+   string exitTag = (why==DEAL_REASON_TP) ? "TP" : (why==DEAL_REASON_SL) ? "SL" : (why==DEAL_REASON_SO) ? "STOP_OUT" : "CLOSED";
+   string res     = (net > 0.0) ? "WIN" : (net < 0.0) ? "LOSS" : "BREAKEVEN";
+   bool   ours    = (g_planActive && posId==g_positionId);
+   double sl      = ours ? g_plan.sl : 0.0;
+   double tp      = ours ? g_plan.tp : 0.0;
+   double risk    = ours ? g_plan.riskMoney : 0.0;
+
+   LogEvent("TRADE_CLOSE",dir,entryPrice,sl,tp,volume,risk,res+"_"+exitTag,net,
+            dir > 0 ? "CLOSE_ABOVE_ACC_HIGH" : "CLOSE_BELOW_ACC_LOW");
+   g_tradeStatus = StringFormat("CLOSED %s %s %s",exitTag,res,DoubleToString(net,2));
+   DrawResult(closeTime,closePrice,StringFormat("%s %s %s",res,exitTag,DoubleToString(net,2)),net >= 0.0);
+   g_planActive = false;
+   g_positionId = 0;
+  }
+//+------------------------------------------------------------------+
