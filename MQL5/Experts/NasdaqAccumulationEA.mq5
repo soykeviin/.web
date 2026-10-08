@@ -3,7 +3,7 @@
 //|    NASDAQ 100 - Ruptura de la acumulación 09:00-09:30 New York   |
 //+------------------------------------------------------------------+
 #property copyright   "8bits Agency"
-#property version     "1.10"
+#property version     "1.11"
 #property description "NASDAQ 100 / M5: ruptura de la acumulación de apertura de Nueva York."
 #property description "Una sola operación por día. Sin martingala, grid, promediado ni reentradas."
 
@@ -63,7 +63,7 @@ input ENUM_SERVER_DST ServerDSTMode   = SERVER_DST_US;// Horario de verano que a
 
 input group "=== Estrategia ==="
 input ENUM_PRICE_UNIT PointUnit             = UNIT_INDEX_POINTS; // Unidad de todos los inputs en "puntos"
-input double          MaxAccumulationPoints = 40.0;   // MaxAccumulationPoints: rango máximo de la acumulación
+input double          MaxAccumulationPoints = 120.0;  // MaxAccumulationPoints: rango máximo de la acumulación
 input double          SL_Buffer_Points      = 1.0;    // SL_Buffer_Points: distancia extra del SL tras el extremo
 input double          RiskReward            = 2.0;    // RiskReward: TP = riesgo x RiskReward
 

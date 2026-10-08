@@ -66,7 +66,7 @@ Todas las distancias en "puntos" (`MaxAccumulationPoints`, `SL_Buffer_Points`, `
 | `ServerGMTOffset` | 2 | Offset GMT del servidor del broker **en invierno**. |
 | `ServerDSTMode` | US | Horario de verano que aplica el servidor: Ninguno / EE.UU. / Europa. |
 | `PointUnit` | Puntos de índice | `Puntos de índice`: 1 punto = 1.0 de precio (40 pts = 18000 → 18040). `Puntos MT5`: 1 punto = `_Point`. |
-| `MaxAccumulationPoints` | 40 | Rango máximo de la acumulación. Si se supera, no se opera ese día. |
+| `MaxAccumulationPoints` | 120 | Rango máximo de la acumulación. Si se supera, no se opera ese día. (Subido de 40 a 120: con el NASDAQ en ~30 000, 40 puntos invalidaba casi todos los días.) |
 | `SL_Buffer_Points` | 1.0 | Distancia extra del SL por fuera del extremo de la acumulación. |
 | `RiskReward` | 2.0 | Relación beneficio/riesgo del TP (2.0 = 1:2). |
 | `RiskPercent` | 10.0 | % del equity arriesgado en la operación (riesgo monetario hasta el SL, no tamaño nominal). |
