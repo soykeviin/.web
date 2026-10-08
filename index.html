@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Kronos en el navegador</title>
+  <meta name="description" content="Predicción de velas financieras con el modelo Kronos ejecutándose localmente en tu navegador.">
+  <style>
+    :root {
+      --bg: #f6f7f9; --panel: #ffffff; --text: #16181d; --muted: #646b78; --border: #dde1e7;
+      --accent: #3b5bdb; --accent-text: #ffffff; --up: #12a150; --down: #e03131;
+      --pred-up: #7048e8; --pred-down: #f08c00; --grid: #eceff3; --input: #ffffff;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+        --bg: #101216; --panel: #181b21; --text: #e7e9ee; --muted: #9aa2b1; --border: #2a2f38;
+        --accent: #5c7cfa; --accent-text: #ffffff; --up: #2fb36b; --down: #f05252;
+        --pred-up: #9775fa; --pred-down: #ffa94d; --grid: #222630; --input: #12151a;
+      }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    header { padding: 20px 16px 8px; max-width: 1200px; margin: 0 auto; }
+    h1 { font-size: 22px; margin: 0 0 4px; }
+    header p { margin: 0; color: var(--muted); }
+    a { color: var(--accent); }
+    main { max-width: 1200px; margin: 0 auto; padding: 8px 16px 40px; display: grid; grid-template-columns: 320px 1fr; gap: 16px; }
+    @media (max-width: 860px) { main { grid-template-columns: 1fr; } }
+    .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px; }
+    .panel h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 10px; }
+    .panel + .panel { margin-top: 12px; }
+    label { display: block; font-size: 12px; color: var(--muted); margin: 8px 0 3px; }
+    input, select { width: 100%; padding: 7px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--input); color: var(--text); font: inherit; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .tabs { display: flex; gap: 4px; margin-bottom: 4px; }
+    .tabs button { flex: 1; padding: 6px; border: 1px solid var(--border); background: transparent; color: var(--text); border-radius: 6px; cursor: pointer; font: inherit; }
+    .tabs button.active { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+    .check { display: flex; align-items: center; gap: 6px; margin-top: 10px; color: var(--text); font-size: 13px; }
+    .check input { width: auto; }
+    button.primary { width: 100%; margin-top: 14px; padding: 10px; border: 0; border-radius: 8px; background: var(--accent); color: var(--accent-text); font: 600 15px system-ui, sans-serif; cursor: pointer; }
+    button.primary:disabled { opacity: .55; cursor: progress; }
+    button.secondary { padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; background: transparent; color: var(--text); cursor: pointer; font: inherit; }
+    .hint { font-size: 12px; color: var(--muted); margin: 6px 0 0; }
+    .status { margin-top: 10px; font-size: 13px; min-height: 20px; }
+    .status.error { color: var(--down); }
+    progress { width: 100%; height: 8px; margin-top: 6px; }
+    #chartWrap { position: relative; }
+    canvas { width: 100%; height: 460px; display: block; }
+    #tooltip { position: absolute; pointer-events: none; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font-size: 12px; display: none; white-space: nowrap; box-shadow: 0 2px 8px rgba(0,0,0,.15); }
+    .legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: var(--muted); margin-top: 8px; }
+    .legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; background: var(--c); }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; margin-top: 12px; }
+    .stat { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+    .stat b { display: block; font-size: 16px; }
+    .stat small { color: var(--muted); }
+    .tablewrap { max-height: 300px; overflow: auto; margin-top: 10px; }
+    table { border-collapse: collapse; width: 100%; font-size: 12px; font-variant-numeric: tabular-nums; }
+    th, td { padding: 4px 8px; border-bottom: 1px solid var(--grid); text-align: right; }
+    th:first-child, td:first-child { text-align: left; }
+    th { position: sticky; top: 0; background: var(--panel); color: var(--muted); font-weight: 500; }
+    .toolbar { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Kronos en el navegador</h1>
+    <p>Modelo fundacional para velas financieras (<a href="https://github.com/shiyu-coder/Kronos" target="_blank" rel="noopener">shiyu-coder/Kronos</a>) ejecutado 100% en local con JavaScript. Los pesos se descargan de Hugging Face y se guardan en caché.</p>
+  </header>
+  <main>
+    <section>
+      <div class="panel">
+        <h2>Modelo</h2>
+        <select id="model">
+          <option value="mini">Kronos-mini · 4.1M · ctx 2048 (~20 MB)</option>
+          <option value="small" selected>Kronos-small · 24.7M · ctx 512 (~110 MB)</option>
+          <option value="base">Kronos-base · 102M · ctx 512 (~420 MB, lento)</option>
+        </select>
+        <label for="hub">Servidor Hugging Face (o mirror)</label>
+        <input id="hub" value="https://huggingface.co">
+      </div>
+
+      <div class="panel">
+        <h2>Datos</h2>
+        <div class="tabs">
+          <button data-src="binance" class="active">Binance</button>
+          <button data-src="csv">CSV</button>
+        </div>
+        <div id="src-binance">
+          <div class="row">
+            <div><label for="symbol">Par</label><input id="symbol" value="BTCUSDT"></div>
+            <div><label for="interval">Intervalo</label>
+              <select id="interval">
+                <option>5m</option><option>15m</option><option>30m</option><option selected>1h</option><option>4h</option><option>1d</option>
+              </select>
+            </div>
+          </div>
+          <p class="hint">Velas públicas de data-api.binance.vision.</p>
+        </div>
+        <div id="src-csv" class="hidden">
+          <label for="csv">Archivo CSV</label>
+          <input id="csv" type="file" accept=".csv,text/csv">
+          <p class="hint">Columnas: <code>timestamps</code> (o date/time), <code>open, high, low, close</code> y opcionalmente <code>volume, amount</code>.</p>
+        </div>
+        <p id="dataInfo" class="hint"></p>
+      </div>
+
+      <div class="panel">
+        <h2>Predicción</h2>
+        <div class="row">
+          <div><label for="lookback">Historia (velas)</label><input id="lookback" type="number" min="16" value="400"></div>
+          <div><label for="predLen">Horizonte</label><input id="predLen" type="number" min="1" value="60"></div>
+        </div>
+        <div class="row">
+          <div><label for="temp">Temperatura</label><input id="temp" type="number" step="0.1" min="0.1" value="1.0"></div>
+          <div><label for="topP">top_p</label><input id="topP" type="number" step="0.05" min="0.05" max="1" value="0.9"></div>
+        </div>
+        <div class="row">
+          <div><label for="samples">Muestras</label><input id="samples" type="number" min="1" max="50" value="1"></div>
+          <div><label for="seed">Semilla</label><input id="seed" type="number" value="42"></div>
+        </div>
+        <label class="check"><input id="backtest" type="checkbox"> Backtest: ocultar las últimas velas y compararlas</label>
+        <button id="run" class="primary">Predecir</button>
+        <div id="status" class="status"></div>
+        <progress id="progress" class="hidden" max="1" value="0"></progress>
+      </div>
+    </section>
+
+    <section>
+      <div class="panel">
+        <div class="toolbar">
+          <h2 id="chartTitle" style="margin:0">Gráfico</h2>
+          <button id="download" class="secondary hidden">Descargar CSV</button>
+        </div>
+        <div id="chartWrap">
+          <canvas id="chart"></canvas>
+          <div id="tooltip"></div>
+        </div>
+        <div class="legend">
+          <span style="--c: var(--up)">Histórico</span>
+          <span style="--c: var(--pred-up)">Predicción Kronos</span>
+          <span id="legendActual" class="hidden" style="--c: var(--muted)">Real (backtest)</span>
+        </div>
+        <div id="stats" class="stats"></div>
+        <div class="tablewrap"><table id="table"></table></div>
+      </div>
+    </section>
+  </main>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
