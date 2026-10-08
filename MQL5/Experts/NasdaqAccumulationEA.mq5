@@ -29,7 +29,7 @@ enum ENUM_EA_PHASE
   {
    PHASE_WAIT_SESSION,    // antes del inicio de la acumulación
    PHASE_BUILDING,        // dentro de la ventana de acumulación
-   PHASE_WAIT_BREAKOUT,   // acumulación válida, esperando cierre fuera de la zona
+   PHASE_WAIT_BREAKOUT,   // acumulación válida, esperando que el precio salga de la zona
    PHASE_SIGNAL_PENDING,  // ruptura detectada, ejecutando la entrada
    PHASE_DONE             // día terminado (operación realizada o bloqueado)
   };
@@ -135,11 +135,10 @@ string   g_lastReason    = "";
 double   g_dayStartEquity= 0.0;
 double   g_dailyPnL      = 0.0;   // resultado realizado del día
 
-datetime g_lastCheckedBar  = 0;   // última vela M5 evaluada como posible ruptura
-datetime g_lastScanBarOpen = 0;   // vela en formación cuando se hizo el último escaneo
+bool     g_watchStarted    = false; // ya se comprobó si la ruptura ocurrió sin el EA
 int      g_signalDir       = 0;   // ruptura pendiente de ejecutar
-datetime g_signalBarTime   = 0;
-double   g_signalClose     = 0.0;
+datetime g_signalTime      = 0;   // momento (servidor) en que el precio rompió la zona
+double   g_signalPrice     = 0.0;
 int      g_orderAttempts   = 0;
 string   g_lastTransient   = "";
 
@@ -671,11 +670,10 @@ void ResetDay(const datetime nyDay)
    g_dayLocked      = false;
    g_noTradeLogged  = false;
    g_lastReason     = "";
-   g_lastCheckedBar = 0;
-   g_lastScanBarOpen= 0;
+   g_watchStarted   = false;
    g_signalDir      = 0;
-   g_signalBarTime  = 0;
-   g_signalClose    = 0.0;
+   g_signalTime     = 0;
+   g_signalPrice    = 0.0;
    g_orderAttempts  = 0;
    g_lastTransient  = "";
    g_planActive     = false;
@@ -776,7 +774,6 @@ bool BuildAccumulation(const datetime now)
    g_accLow         = lo;
    g_accRangePts    = PriceToPoints(hi-lo);
    g_accValid       = (hi > lo && g_accRangePts <= MaxAccumulationPoints + 1e-9);
-   g_lastCheckedBar = g_srvAccEnd - g_tfSeconds; // última vela de la acumulación
 
    PrintFormat("[NAE] Acumulación %s NY: high=%s low=%s rango=%s pts (máx %s) => %s",
                TimeToString(g_nyDay,TIME_DATE),Px(hi),Px(lo),Pts(g_accRangePts),Pts(MaxAccumulationPoints),
@@ -939,12 +936,13 @@ bool CheckOrderRequest(const TradePlan &plan,string &reason)
    return false;
   }
 
-int BreakoutDirection(const double barClose)
+//--- +1 si el precio supera el máximo, -1 si perfora el mínimo (al menos 1 tick)
+int BreakoutDirection(const double price)
   {
-   if(barClose - g_accHigh > g_tickSize*0.5)
-      return 1;   // cierre por encima del máximo
-   if(g_accLow - barClose > g_tickSize*0.5)
-      return -1;  // cierre por debajo del mínimo
+   if(price - g_accHigh > g_tickSize*0.5)
+      return 1;
+   if(g_accLow - price > g_tickSize*0.5)
+      return -1;
    return 0;
   }
 
@@ -1005,17 +1003,18 @@ bool CheckRiskConditions(const int dir,const datetime now,TradePlan &plan,string
      { reason = "INSUFFICIENT_MARGIN"; return false; }
    if(!CheckOrderRequest(plan,reason))
       return false;
-   // 10. Ruptura: la vela de señal cerró fuera de la zona en la dirección de la orden
-   if(BreakoutDirection(g_signalClose)!=dir)
-     { reason = "NO_VALID_BREAKOUT"; return false; }
+   // 10. Ruptura: el precio sigue fuera de la zona en la dirección de la orden
+   if(BreakoutDirection(TriggerPrice(tick))!=dir)
+     { reason = "PRICE_BACK_INSIDE"; return false; }
 
-   reason = (dir > 0) ? "CLOSE_ABOVE_ACC_HIGH" : "CLOSE_BELOW_ACC_LOW";
+   reason = (dir > 0) ? "BREAK_ABOVE_ACC_HIGH" : "BREAK_BELOW_ACC_LOW";
    return true;
   }
 
 bool IsTransientReason(const string reason)
   {
-   return (reason=="SPREAD_TOO_HIGH" || reason=="NO_PRICE" || reason=="TRADING_DISABLED");
+   return (reason=="SPREAD_TOO_HIGH" || reason=="NO_PRICE" || reason=="TRADING_DISABLED" ||
+           reason=="PRICE_BACK_INSIDE");
   }
 
 bool IsTransientRetcode(const uint rc)
@@ -1041,7 +1040,7 @@ void OnPositionOpened(const TradePlan &plan,const double fillPrice)
    g_tpAdjusted  = false;
    g_protectFails= 0;
    g_entryTime   = TimeCurrent();
-   g_lastReason  = (plan.direction > 0) ? "CLOSE_ABOVE_ACC_HIGH" : "CLOSE_BELOW_ACC_LOW";
+   g_lastReason  = (plan.direction > 0) ? "BREAK_ABOVE_ACC_HIGH" : "BREAK_BELOW_ACC_LOW";
    g_tradeStatus = Side(plan.direction)+" OPEN";
 
    if(fillPrice > 0.0)
@@ -1118,7 +1117,7 @@ void TryExecuteSignal(const datetime now)
       if(IsTransientReason(reason))
         {
          if(reason!=g_lastTransient)
-            PrintFormat("[NAE] Entrada %s en espera: %s (se reintenta hasta el cierre de la vela actual)",
+            PrintFormat("[NAE] Entrada %s en espera: %s (se reintenta durante 1 vela desde la ruptura)",
                         Side(g_signalDir),reason);
          g_lastTransient = reason;
          return;
@@ -1205,14 +1204,45 @@ void EnsureProtection()
 //+------------------------------------------------------------------+
 //| RUPTURA                                                          |
 //+------------------------------------------------------------------+
-//--- evalúa cada vela cerrada desde la acumulación. Sólo la ÚLTIMA vela cerrada puede
-//    generar entrada: una ruptura anterior no aprovechada (EA reiniciado) bloquea el día.
+//--- precio que dibuja las velas del símbolo (Bid en CFDs, Last en símbolos de bolsa)
+double TriggerPrice(const MqlTick &tick)
+  {
+   if(SymbolInfoInteger(_Symbol,SYMBOL_CHART_MODE)==SYMBOL_CHART_MODE_LAST && tick.last > 0.0)
+      return tick.last;
+   return tick.bid;
+  }
+
+//--- ¿alguna vela YA CERRADA desde el fin de la acumulación superó la zona?
+//    1 = sí, 0 = no, -1 = historial no disponible (reintentar)
+int MissedBreakoutCheck()
+  {
+   datetime curOpen = iTime(_Symbol,SignalTimeframe,0);
+   if(curOpen==0)
+      return -1;
+   if(curOpen <= g_srvAccEnd)
+      return 0;   // seguimos en la primera vela de búsqueda (09:30)
+   MqlRates rates[];
+   int copied = CopyRates(_Symbol,SignalTimeframe,g_srvAccEnd,curOpen-1,rates);
+   if(copied < 0)
+      return -1;
+   for(int i=0; i<copied; i++)
+     {
+      if(rates[i].time < g_srvAccEnd || rates[i].time >= curOpen)
+         continue;
+      if(BreakoutDirection(rates[i].high) > 0 || BreakoutDirection(rates[i].low) < 0)
+         return 1;
+     }
+   return 0;
+  }
+
+//--- ruptura INTRAVELA: desde las 09:30 NY, en cuanto el precio supera el máximo o
+//    el mínimo de la acumulación se entra, sin esperar el cierre de la vela M5.
 void CheckBreakout(const datetime now)
   {
    if(g_signalDir!=0)
      {
-      // La señal sólo es ejecutable durante la vela siguiente a la ruptura
-      if(now >= g_signalBarTime + 2*g_tfSeconds)
+      // Reintentos (sólo causas transitorias) durante una vela M5 desde la ruptura
+      if(now >= g_signalTime + g_tfSeconds)
         {
          LockDay(g_lastTransient!="" ? g_lastTransient : "BREAKOUT_EXPIRED");
          return;
@@ -1221,66 +1251,47 @@ void CheckBreakout(const datetime now)
       return;
      }
 
-   datetime barOpen = iTime(_Symbol,SignalTimeframe,0);
-   if(barOpen==0)
-      return;
-   if(barOpen==g_lastScanBarOpen)
+   if(now >= g_srvTradeEnd)
      {
-      if(now >= g_srvTradeEnd)
-         LockDay("NO_VALID_BREAKOUT");
+      LockDay("NO_VALID_BREAKOUT");
       return;
      }
 
-   MqlRates rates[];
-   int copied = CopyRates(_Symbol,SignalTimeframe,g_lastCheckedBar+1,now,rates);
-   if(copied < 0)
+   // Al empezar a vigilar (09:30 o tras reiniciar el EA): si una vela ya cerrada rompió la
+   // zona, la ruptura del día ocurrió sin el EA y no se persigue tarde.
+   if(!g_watchStarted)
      {
-      if(now >= g_srvTradeEnd)
-         LockDay("NO_VALID_BREAKOUT");
-      return; // historial no disponible: se reintenta en el próximo tick
-     }
-   g_lastScanBarOpen = barOpen;
-
-   int latest = -1;
-   for(int i=0; i<copied; i++)
-      if(rates[i].time > g_lastCheckedBar && rates[i].time + g_tfSeconds <= now)
-         latest = i;
-
-   for(int i=0; i<=latest; i++)
-     {
-      if(rates[i].time <= g_lastCheckedBar)
-         continue;
-      g_lastCheckedBar = rates[i].time;
-      int dir = BreakoutDirection(rates[i].close);
-      if(dir==0)
-         continue;
-
-      if(rates[i].time + g_tfSeconds > g_srvTradeEnd || now >= g_srvTradeEnd)
-        {
-         LockDay("OUTSIDE_SESSION");
+      int missed = MissedBreakoutCheck();
+      if(missed < 0)
          return;
-        }
-      if(i!=latest || now >= rates[i].time + 2*g_tfSeconds)
+      if(missed > 0)
         {
          LockDay("BREAKOUT_MISSED");
          return;
         }
-
-      g_signalDir     = dir;
-      g_signalBarTime = rates[i].time;
-      g_signalClose   = rates[i].close;
-      g_orderAttempts = 0;
-      g_lastTransient = "";
-      g_phase         = PHASE_SIGNAL_PENDING;
-      PrintFormat("[NAE] Ruptura %s: vela %s NY cerró en %s (acc high %s / low %s)",
-                  Side(dir),TimeToString(ServerToNewYork(rates[i].time),TIME_MINUTES),Px(rates[i].close),
-                  Px(g_accHigh),Px(g_accLow));
-      TryExecuteSignal(now);
-      return;
+      g_watchStarted = true;
      }
 
-   if(now >= g_srvTradeEnd)
-      LockDay("NO_VALID_BREAKOUT");
+   MqlTick tick;
+   if(!SymbolInfoTick(_Symbol,tick))
+      return;
+   double price = TriggerPrice(tick);
+   if(price <= 0.0)
+      return;
+   int dir = BreakoutDirection(price);
+   if(dir==0)
+      return;
+
+   g_signalDir     = dir;
+   g_signalTime    = now;
+   g_signalPrice   = price;
+   g_orderAttempts = 0;
+   g_lastTransient = "";
+   g_phase         = PHASE_SIGNAL_PENDING;
+   PrintFormat("[NAE] Ruptura %s a las %s NY: precio %s %s %s (acc high %s / low %s)",
+               Side(dir),TimeToString(ServerToNewYork(now),TIME_SECONDS),Px(price),dir > 0 ? ">" : "<",
+               Px(dir > 0 ? g_accHigh : g_accLow),Px(g_accHigh),Px(g_accLow));
+   TryExecuteSignal(now);
   }
 
 //+------------------------------------------------------------------+
@@ -1549,7 +1560,7 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,const MqlTradeRequest &
    double risk    = ours ? g_plan.riskMoney : 0.0;
 
    LogEvent("TRADE_CLOSE",dir,entryPrice,sl,tp,volume,risk,res+"_"+exitTag,net,
-            dir > 0 ? "CLOSE_ABOVE_ACC_HIGH" : "CLOSE_BELOW_ACC_LOW");
+            dir > 0 ? "BREAK_ABOVE_ACC_HIGH" : "BREAK_BELOW_ACC_LOW");
    g_tradeStatus = StringFormat("CLOSED %s %s %s",exitTag,res,DoubleToString(net,2));
    DrawResult(closeTime,closePrice,StringFormat("%s %s %s",res,exitTag,DoubleToString(net,2)),net >= 0.0);
    g_planActive = false;

@@ -15,8 +15,8 @@ Archivo: [`Experts/NasdaqAccumulationEA.mq5`](Experts/NasdaqAccumulationEA.mq5)
 | 00:00 | Nuevo día | Detecta el cambio de fecha **en hora de Nueva York**, reinicia el estado, el contador de operaciones y los dibujos, y guarda el equity inicial del día. |
 | 09:00–09:30 | `BUILDING ACCUMULATION` | Dibuja en vivo el rectángulo con el máximo y el mínimo de las velas M5. |
 | 09:30 | Validación | Con las 6 velas cerradas (09:00…09:25) calcula `High`, `Low` y `Range`. Si `Range > MaxAccumulationPoints`, registra `INVALID_RANGE` y no opera ese día. Si falta alguna vela, registra `ACCUMULATION_INCOMPLETE`. |
-| 09:30 → `End` | `WAITING BREAKOUT` | En cada vela M5 cerrada: si **cierra por encima del máximo** → señal LONG; si **cierra por debajo del mínimo** → señal SHORT. |
-| Señal | Ejecución | Pasa los 10 filtros de seguridad y abre a mercado con SL y TP en la misma orden. Después verifica la posición y ajusta el TP al precio real de ejecución. |
+| 09:30 → `End` | `WAITING BREAKOUT` | **Tick a tick, sin esperar el cierre de la vela:** en cuanto el precio supera el máximo (al menos 1 tick) → LONG; en cuanto perfora el mínimo → SHORT. Puede ocurrir ya dentro de la vela de 09:30. |
+| Ruptura | Ejecución | En ese mismo tick pasa los 10 filtros de seguridad y abre a mercado con SL y TP en la misma orden. Después verifica la posición y ajusta el TP al precio real de ejecución. |
 | Tras la entrada | `DONE FOR TODAY` | El día queda **bloqueado**: no hay segunda entrada, reentrada tras SL, add-on, grid ni martingala. |
 | `End` sin ruptura | `NO TRADE TODAY` | Registra `NO_VALID_BREAKOUT`. |
 
@@ -47,7 +47,7 @@ lotes         = floor( riesgo / pérdidaPorLote / VOLUME_STEP ) × VOLUME_STEP
 7. SL y TP válidos (lado correcto y *stops level* del broker) → si no, `INVALID_SL` / `INVALID_TP`
 8. Lotaje válido → si no, `INVALID_LOT_SIZE`
 9. Margen suficiente (`OrderCalcMargin` + `OrderCheck`) → si no, `INSUFFICIENT_MARGIN` / `ORDER_CHECK_FAILED`
-10. La vela de señal cerró fuera de la zona en la dirección de la orden → si no, `NO_VALID_BREAKOUT`
+10. El precio sigue fuera de la zona en la dirección de la orden → si no, `PRICE_BACK_INSIDE`
 
 Si **cualquiera** falla, la orden no se envía.
 
@@ -106,7 +106,7 @@ Todas las distancias en "puntos" (`MaxAccumulationPoints`, `SL_Buffer_Points`, `
 
 1. **Ver → Probador de estrategias** (Ctrl+R).
 2. Experto: `NasdaqAccumulationEA`. Símbolo: el NASDAQ de tu broker. Periodo: **M5**.
-3. Modelado: **"Cada tick basado en ticks reales"** (recomendado; usa el spread real para el filtro). "1 minuto OHLC" sirve para pruebas rápidas.
+3. Modelado: **"Cada tick basado en ticks reales"**. Es imprescindible, porque la entrada es intravela: el precio exacto de la ruptura y el spread real determinan la entrada y el lotaje. "1 minuto OHLC" solo sirve como aproximación rápida. **No uses "Solo precios de apertura"**: no simula la ruptura dentro de la vela.
 4. Fechas: al menos 1–2 años. Depósito y apalancamiento iguales a los de tu cuenta.
 5. En *Parámetros*, configura `ServerGMTOffset` y `ServerDSTMode` del broker cuyos datos estás usando.
 6. Activa **Visualización** para ver el rectángulo, los niveles y el panel. Sin visualización no se dibuja nada, lo que acelera el test.
@@ -127,8 +127,8 @@ Todas las distancias en "puntos" (`MaxAccumulationPoints`, `SL_Buffer_Points`, `
 | Fines de semana (las ticks del domingo por la tarde en NY) | El día se marca `WEEKEND`, sin registro ni operación. |
 | Festivos o huecos de datos dentro de 09:00–09:30 | `ACCUMULATION_INCOMPLETE` (se exigen todas las velas). |
 | Historial M5 aún sincronizando a las 09:30 | Reintenta durante la primera vela; después bloquea el día. |
-| Spread alto en la vela de ruptura | Reintenta tick a tick **solo durante la vela siguiente**. Si no se normaliza, `SPREAD_TOO_HIGH` y el día se bloquea. |
-| Reinicio del EA o de MT5 a mitad del día | Reconstruye la acumulación desde el historial y cuenta las operaciones del día desde los *deals* del magic. Si la ruptura ocurrió mientras el EA estaba apagado → `BREAKOUT_MISSED` (no entra tarde). |
+| Spread alto en el momento de la ruptura | Reintenta tick a tick **durante 5 minutos (1 vela) desde la ruptura**, siempre que el precio siga fuera de la zona. Si no se normaliza, `SPREAD_TOO_HIGH` y el día se bloquea. |
+| Reinicio del EA o de MT5 a mitad del día | Reconstruye la acumulación desde el historial y cuenta las operaciones del día desde los *deals* del magic. Si alguna vela ya cerrada desde las 09:30 superó la zona mientras el EA estaba apagado → `BREAKOUT_MISSED` (no entra tarde). |
 | Respuesta de `OrderSend` perdida o timeout | Antes de reintentar comprueba posiciones e historial, así que no hay orden duplicada. Además `OnTradeTransaction` bloquea el día en cuanto llega el *deal* de entrada. |
 | Requote o cambio de precio | Hasta 3 intentos dentro de la vela; los errores no transitorios (stops inválidos, volumen, sin dinero) bloquean el día. |
 | Broker que no acepta SL/TP en la orden | Se colocan con `PositionModify`. Si el SL no puede colocarse tras 3 intentos, **la posición se cierra** por seguridad. |
@@ -137,7 +137,10 @@ Todas las distancias en "puntos" (`MaxAccumulationPoints`, `SL_Buffer_Points`, `
 | Posición del día anterior todavía abierta | Bloquea la nueva entrada (`POSITION_EXISTS`). |
 | Lotaje por debajo del mínimo (cuenta pequeña o SL muy amplio) | No opera; nunca redondea hacia arriba. |
 | Símbolo con `TICK_VALUE` 0 en el tester | Usa `OrderCalcProfit` como alternativa (y siempre el mayor de los dos). |
-| Ruptura en la última vela (cierra a la hora `End`) | `OUTSIDE_SESSION`. |
+| Ruptura después de la hora `End` | No se busca: `NO_VALID_BREAKOUT`. Una señal pendiente que llega a `End` → `OUTSIDE_SESSION`. |
+| Precio por fuera de la zona ya en el primer tick de las 09:30 (gap) | Es una ruptura válida y se entra. |
+| Precio por exactamente el máximo o el mínimo | No cuenta: debe superarlo al menos 1 tick. |
+| Ruptura que coincide con un pico de spread | El LONG entra al Ask, que puede quedar varios puntos por encima del máximo. El lotaje usa esa distancia real, así que el riesgo sigue siendo el 10%. |
 | Varias instancias del EA | Los objetos y registros se separan por `MagicNumber`. |
 | Cierre manual de la posición | Se detecta por ID de posición; se registra el resultado y no se reabre. |
 
@@ -155,7 +158,7 @@ Todas las distancias en "puntos" (`MaxAccumulationPoints`, `SL_Buffer_Points`, `
 
 **SL/TP.** El SL está siempre al otro lado de la zona más el buffer. Se valida que el SL esté en el lado correcto y respete el *stops level*. El TP es exactamente `RiskReward` × riesgo, recalculado tras el fill.
 
-**Ruptura.** Solo cuentan velas **cerradas** con apertura ≥ 09:30 NY. Cada vela se evalúa una sola vez (`g_lastCheckedBar`) y solo la primera ruptura del día es válida.
+**Ruptura (intravela).** Desde las 09:30 NY se compara cada tick con el máximo y el mínimo. Se usa el precio con el que se dibujan las velas: Bid en CFDs, Last en símbolos de bolsa. Así la entrada coincide con lo que ves en el gráfico y con los máximos y mínimos de las velas. La primera ruptura del día es la única válida; después el día queda bloqueado.
 
 **Una operación diaria y sin duplicados.** Hay cinco barreras independientes:
 1. `g_dayLocked` se activa en cuanto se envía la orden.
