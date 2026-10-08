@@ -14,7 +14,7 @@ Archivo: [`Experts/NasdaqAccumulationEA.mq5`](Experts/NasdaqAccumulationEA.mq5)
 |---|---|---|
 | 00:00 | Nuevo día | Detecta el cambio de fecha **en hora de Nueva York**, reinicia el estado, el contador de operaciones y los dibujos, y guarda el equity inicial del día. |
 | 09:00–09:30 | `BUILDING ACCUMULATION` | Dibuja en vivo el rectángulo con el máximo y el mínimo de las velas M5. |
-| 09:30 | Validación | Con las 6 velas cerradas (09:00…09:25) calcula `High`, `Low` y `Range`. Si `Range > MaxAccumulationPoints`, registra `INVALID_RANGE` y no opera ese día. Si falta alguna vela, registra `ACCUMULATION_INCOMPLETE`. |
+| 09:30 | Validación | Con las 6 velas cerradas (09:00…09:25) calcula la zona con los **cuerpos** de las velas: `High` = mayor apertura/cierre y `Low` = menor apertura/cierre, sin mechas. Después cuenta los **rebotes**: velas cuya mecha llega a la franja superior (techo) o inferior (suelo) de la zona. La acumulación es válida si `Range ≤ MaxAccumulationPoints` y hay al menos `MinTouches` toques en el techo **y** en el suelo. Si no, registra `INVALID_RANGE` o `NOT_ENOUGH_REBOUNDS`. Si falta alguna vela, registra `ACCUMULATION_INCOMPLETE`. |
 | 09:30 → `End` | `WAITING BREAKOUT` | **Tick a tick, sin esperar el cierre de la vela:** en cuanto el precio supera el máximo (al menos 1 tick) → LONG; en cuanto perfora el mínimo → SHORT. Puede ocurrir ya dentro de la vela de 09:30. |
 | Ruptura | Ejecución | En ese mismo tick pasa los 10 filtros de seguridad y abre a mercado con SL y TP en la misma orden. Después verifica la posición y ajusta el TP al precio real de ejecución. |
 | Tras la entrada | `DONE FOR TODAY` | El día queda **bloqueado**: no hay segunda entrada, reentrada tras SL, add-on, grid ni martingala. |
@@ -40,7 +40,7 @@ lotes         = floor( riesgo / pérdidaPorLote / VOLUME_STEP ) × VOLUME_STEP
 
 1. Hora dentro de `[AccumEnd, End)` → si no, `OUTSIDE_SESSION`
 2. Acumulación formada → si no, `ACCUMULATION_NOT_READY` / `ACCUMULATION_INCOMPLETE`
-3. Rango ≤ máximo → si no, `INVALID_RANGE`
+3. Rango ≤ máximo y rebotes suficientes → si no, `INVALID_RANGE` / `NOT_ENOUGH_REBOUNDS`
 4. Ninguna operación hoy y límite diario sin alcanzar → si no, `ALREADY_TRADED` / `DAILY_LIMIT_REACHED`
 5. Ninguna posición del EA abierta (en cuentas *netting*, ninguna posición en el símbolo) → si no, `POSITION_EXISTS`
 6. Spread ≤ `MaxSpreadPoints` → si no, `SPREAD_TOO_HIGH`
@@ -67,6 +67,9 @@ Todas las distancias en "puntos" (`MaxAccumulationPoints`, `SL_Buffer_Points`, `
 | `ServerDSTMode` | US | Horario de verano que aplica el servidor: Ninguno / EE.UU. / Europa. |
 | `PointUnit` | Puntos de índice | `Puntos de índice`: 1 punto = 1.0 de precio (40 pts = 18000 → 18040). `Puntos MT5`: 1 punto = `_Point`. |
 | `MaxAccumulationPoints` | 120 | Rango máximo de la acumulación. Si se supera, no se opera ese día. (Subido de 40 a 120: con el NASDAQ en ~30 000, 40 puntos invalidaba casi todos los días.) |
+| `UseCandleBodies` | true | `true`: la zona se mide con los **cuerpos** de las velas (apertura/cierre), sin mechas. `false`: con máximos y mínimos completos. |
+| `MinTouches` | 2 | Mínimo de velas que deben tocar el techo **y** mínimo que deben tocar el suelo de la zona (rebotes). Las velas que definen los extremos cuentan, así que con 2 hace falta al menos otro rebote en cada lado. `0` desactiva el filtro. |
+| `TouchZonePercent` | 20 | Franja de toque: una vela toca el techo si su máximo (mecha incluida) llega a menos del X% del rango del borde superior; igual para el suelo. |
 | `SL_Buffer_Points` | 1.0 | Distancia extra del SL por fuera del extremo de la acumulación. |
 | `RiskReward` | 2.0 | Relación beneficio/riesgo del TP (2.0 = 1:2). |
 | `RiskPercent` | 10.0 | % del equity arriesgado en la operación (riesgo monetario hasta el SL, no tamaño nominal). |
@@ -137,6 +140,7 @@ Cuando rechaza una entrada imprime una línea `Entrada LONG/SHORT RECHAZADA: <mo
 | `INSUFFICIENT_MARGIN` | Con `RiskPercent = 10` y un SL de unos 40 puntos, la posición necesaria vale unas **50 veces el equity**. Muchos brokers apalancan el NASDAQ a 1:20–1:50, así que el margen no alcanza. | Baja `RiskPercent` (p. ej. 1–2%), sube el apalancamiento del test o activa `AdjustLotToLimits`. |
 | `INVALID_LOT_SIZE` | El lote supera el máximo del broker o queda por debajo del mínimo (cuenta pequeña). | Activa `AdjustLotToLimits` (máximo) o aumenta el depósito (mínimo). |
 | `INVALID_RANGE` | La acumulación de 09:00–09:30 supera `MaxAccumulationPoints`. Con el NASDAQ por encima de 20 000, rangos de más de 40 puntos son frecuentes. | Confirma que es el comportamiento deseado o sube `MaxAccumulationPoints`. |
+| `NOT_ENOUGH_REBOUNDS` | El precio no rebotó suficientes veces en el techo y en el suelo de la zona: fue una tendencia, no una acumulación. | Comportamiento esperado. Para ser más o menos exigente, ajusta `MinTouches` o `TouchZonePercent`. |
 | `SPREAD_TOO_HIGH` | Spread por encima de `MaxSpreadPoints` en el momento de la ruptura. | Revisa el spread del símbolo o del test y sube `MaxSpreadPoints`. |
 | `TRADING_DISABLED` | Trading algorítmico desactivado en el terminal o en las propiedades del EA (solo en cuenta real o demo). | Activa ambos. |
 | `BREAKOUT_MISSED` | El EA se inició o reinició después de que el precio ya hubiera roto la zona. | Normal: no entra tarde. |
