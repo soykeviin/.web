@@ -3,7 +3,7 @@
 //|    NASDAQ 100 - Ruptura de la acumulación 09:00-09:30 New York   |
 //+------------------------------------------------------------------+
 #property copyright   "8bits Agency"
-#property version     "1.20"
+#property version     "1.30"
 #property description "NASDAQ 100 / M5: ruptura de la acumulación de apertura de Nueva York."
 #property description "Una sola operación por día. Sin martingala, grid, promediado ni reentradas."
 
@@ -65,7 +65,9 @@ input group "=== Estrategia ==="
 input ENUM_PRICE_UNIT PointUnit             = UNIT_INDEX_POINTS; // Unidad de todos los inputs en "puntos"
 input double          MaxAccumulationPoints = 120.0;  // MaxAccumulationPoints: rango máximo de la acumulación
 input bool            UseCandleBodies       = true;   // Acumulación con el CUERPO de las velas (sin mechas)
-input int             MinTouches            = 2;      // Mínimo de toques (rebotes) en el techo y en el suelo
+input int             MinAccumCandles       = 4;      // Mínimo de velas consecutivas que forman la acumulación
+input int             MinTouches            = 2;      // Mínimo de toques en el techo y en el suelo
+input int             MinRebounds           = 2;      // Mínimo de rebotes (cambios techo<->suelo)
 input double          TouchZonePercent      = 20.0;   // Franja de toque: % del rango junto a cada borde
 input double          SL_Buffer_Points      = 1.0;    // SL_Buffer_Points: distancia extra del SL tras el extremo
 input double          RiskReward            = 2.0;    // RiskReward: TP = riesgo x RiskReward
@@ -83,6 +85,9 @@ input group "=== Visual y registro ==="
 input bool   DrawObjects          = true;             // Dibujar acumulación y niveles
 input bool   ShowPanel            = true;             // Mostrar panel informativo
 input bool   KeepPreviousDrawings = false;            // Conservar dibujos de días anteriores
+input color  AccumBoxColor        = C'222,196,160';   // Color del cuadro de acumulación válida
+input color  InvalidBoxColor      = C'215,215,215';   // Color del cuadro de acumulación no válida
+input color  AccumBorderColor     = C'60,60,60';      // Color del borde del cuadro
 input bool   WriteCSVLog          = true;             // Guardar registro CSV (carpeta Common\Files)
 input string CSVFileName          = "NasdaqAccumulationEA_log.csv"; // Nombre del archivo CSV
 
@@ -132,7 +137,10 @@ double   g_accLow       = 0.0;
 double   g_accRangePts  = 0.0;
 double   g_estLots      = 0.0;   // lotaje estimado (informativo para el panel)
 int      g_touchHigh    = 0;     // velas que tocaron el techo de la zona
+int      g_accCandles   = 0;     // velas consecutivas que forman la acumulación
+datetime g_srvBoxStart  = 0;     // apertura de la primera vela de la acumulación (servidor)
 int      g_touchLow     = 0;     // velas que tocaron el suelo de la zona
+int      g_rebounds     = 0;     // veces que el precio fue de un borde al otro
 
 int      g_tradesToday   = 0;
 bool     g_dayLocked     = false; // sin más entradas hasta el siguiente día NY
@@ -543,14 +551,19 @@ void DrawAccumulation(const double hi,const double lo,const bool valid)
   {
    if(!g_drawEnabled || hi<=0.0 || lo<=0.0)
       return;
-   color boxClr = valid ? C'25,55,95' : C'85,40,40';
-   DrawRectangle(ObjName("ACC_BOX"),g_srvAccStart,hi,g_srvAccEnd,lo,boxClr);
-   DrawSegment(ObjName("ACC_HIGH"),g_srvAccStart,g_srvTradeEnd,hi,clrDeepSkyBlue,STYLE_DASH,1);
-   DrawSegment(ObjName("ACC_LOW"),g_srvAccStart,g_srvTradeEnd,lo,clrOrange,STYLE_DASH,1);
-   DrawLabelText(ObjName("ACC_HIGH_TXT"),g_srvAccStart,hi,"ACC HIGH "+Px(hi),clrDeepSkyBlue,ANCHOR_LEFT_LOWER);
-   string lowTxt = "ACC LOW "+Px(lo)+"  |  "+Pts(PriceToPoints(hi-lo))+" pts  |  rebotes "+
-                   IntegerToString(g_touchHigh)+"/"+IntegerToString(g_touchLow)+(valid ? "" : "  INVALID");
-   DrawLabelText(ObjName("ACC_LOW_TXT"),g_srvAccStart,lo,lowTxt,valid ? clrOrange : clrTomato,ANCHOR_LEFT_UPPER);
+   datetime t1 = (g_srvBoxStart > 0) ? g_srvBoxStart : g_srvAccStart;
+   // Cuadro relleno detrás de las velas + borde por delante para que siempre se vea
+   DrawRectangle(ObjName("ACC_BOX"),t1,hi,g_srvAccEnd,lo,valid ? AccumBoxColor : InvalidBoxColor);
+   string border = ObjName("ACC_BORDER");
+   DrawRectangle(border,t1,hi,g_srvAccEnd,lo,AccumBorderColor);
+   ObjectSetInteger(0,border,OBJPROP_FILL,false);
+   ObjectSetInteger(0,border,OBJPROP_BACK,false);
+   ObjectSetInteger(0,border,OBJPROP_WIDTH,2);
+   DrawSegment(ObjName("ACC_HIGH"),g_srvAccEnd,g_srvTradeEnd,hi,clrDodgerBlue,STYLE_DASH,1);
+   DrawSegment(ObjName("ACC_LOW"),g_srvAccEnd,g_srvTradeEnd,lo,clrOrangeRed,STYLE_DASH,1);
+   DrawLabelText(ObjName("ACC_HIGH_TXT"),t1,hi,"ACUMULACIÓN  "+IntegerToString(g_accCandles)+" velas  |  "+
+                 Pts(PriceToPoints(hi-lo))+" pts  |  rebotes "+IntegerToString(g_rebounds)+
+                 (valid ? "" : "  |  NO VÁLIDA"),valid ? AccumBorderColor : clrRed,ANCHOR_LEFT_LOWER);
    ChartRedraw(0);
   }
 
@@ -677,7 +690,8 @@ void UpdatePanel()
    lines[10] = "Daily P/L: "+Money(g_dailyPnL + FloatingPnL());
    lines[11] = "Spread: "+Pts(spreadPts)+" pts (max "+Pts(MaxSpreadPoints)+")";
    lines[12] = "Reason: "+(g_lastReason=="" ? "-" : g_lastReason);
-   lines[13] = StringFormat("Rebounds: top %d / bottom %d (min %d)",g_touchHigh,g_touchLow,MinTouches);
+   lines[13] = StringFormat("Candles %d/%d | Touches %d/%d | Rebounds %d/%d",g_accCandles,MinAccumCandles,
+                            g_touchHigh,g_touchLow,g_rebounds,MinRebounds);
 
    for(int i=0; i<PANEL_LINES; i++)
       ObjectSetString(0,g_objPrefix+"PANEL_L"+IntegerToString(i),OBJPROP_TEXT,lines[i]);
@@ -709,6 +723,9 @@ void ResetDay(const datetime nyDay)
    g_estLots        = 0.0;
    g_touchHigh      = 0;
    g_touchLow       = 0;
+   g_accCandles     = 0;
+   g_rebounds       = 0;
+   g_srvBoxStart    = 0;
    g_tradesToday    = 0;
    g_dayLocked      = false;
    g_noTradeLogged  = false;
@@ -761,100 +778,188 @@ bool DetectNewDay(const datetime srvNow)
 //+------------------------------------------------------------------+
 //| ACUMULACIÓN                                                      |
 //+------------------------------------------------------------------+
-//--- zona de la ventana de acumulación: extremos de los CUERPOS (apertura/cierre) o de
-//    las velas completas si UseCandleBodies=false. Devuelve el número de velas de la ventana.
-int ComputeZone(const MqlRates &rates[],const int copied,double &hi,double &lo)
+//--- velas de la ventana 09:00-09:30 NY en orden cronológico
+int WindowBars(const MqlRates &rates[],const int copied,MqlRates &win[])
   {
-   hi = -DBL_MAX;
-   lo = DBL_MAX;
-   int count = 0;
+   ArrayResize(win,0);
    for(int i=0; i<copied; i++)
      {
       if(rates[i].time < g_srvAccStart || rates[i].time >= g_srvAccEnd)
          continue;
-      double top    = UseCandleBodies ? MathMax(rates[i].open,rates[i].close) : rates[i].high;
-      double bottom = UseCandleBodies ? MathMin(rates[i].open,rates[i].close) : rates[i].low;
-      hi = MathMax(hi,top);
-      lo = MathMin(lo,bottom);
-      count++;
+      int n = ArraySize(win);
+      ArrayResize(win,n+1);
+      win[n] = rates[i];
      }
-   return count;
+   return ArraySize(win);
   }
 
-//--- rebotes: velas de la ventana que llegan (mecha incluida) a la franja superior o
+double BarTop(const MqlRates &bars[],const int k)    { return UseCandleBodies ? MathMax(bars[k].open,bars[k].close) : bars[k].high; }
+double BarBottom(const MqlRates &bars[],const int k) { return UseCandleBodies ? MathMin(bars[k].open,bars[k].close) : bars[k].low; }
+
+//--- ACUMULACIÓN = bloque de velas CONSECUTIVAS que termina en la última vela de la
+//    ventana (justo antes de las 09:30), donde cada vela solapa su cuerpo con la zona
+//    formada por las siguientes y el rango total no supera MaxAccumulationPoints.
+//    Devuelve el número de velas del bloque; 'first' es el índice de la primera.
+int FindAccumulation(const MqlRates &win[],const int n,double &hi,double &lo,int &first)
+  {
+   hi    = 0.0;
+   lo    = 0.0;
+   first = n;
+   for(int k=n-1; k>=0; k--)
+     {
+      double top    = BarTop(win,k);
+      double bottom = BarBottom(win,k);
+      if(k==n-1)
+        {
+         if(PriceToPoints(top-bottom) > MaxAccumulationPoints + 1e-9)
+            break;
+         hi = top;
+         lo = bottom;
+         first = k;
+         continue;
+        }
+      if(bottom > hi || top < lo)
+         break;   // no solapa: el precio venía de otro nivel (tendencia, no acumulación)
+      double newHi = MathMax(hi,top);
+      double newLo = MathMin(lo,bottom);
+      if(PriceToPoints(newHi-newLo) > MaxAccumulationPoints + 1e-9)
+         break;
+      hi    = newHi;
+      lo    = newLo;
+      first = k;
+     }
+   return n-first;
+  }
+
+//--- rebotes: velas del bloque que llegan (mecha incluida) a la franja superior o
 //    inferior de la zona. La franja es TouchZonePercent % del rango junto a cada borde.
-void CountTouches(const MqlRates &rates[],const int copied,const double hi,const double lo,
+void CountTouches(const MqlRates &win[],const int first,const int n,const double hi,const double lo,
                   int &touchHi,int &touchLo)
   {
    double tol = (hi - lo)*TouchZonePercent/100.0;
    touchHi = 0;
    touchLo = 0;
-   for(int i=0; i<copied; i++)
+   for(int i=first; i<n; i++)
      {
-      if(rates[i].time < g_srvAccStart || rates[i].time >= g_srvAccEnd)
-         continue;
-      if(rates[i].high >= hi - tol)
+      if(win[i].high >= hi - tol)
          touchHi++;
-      if(rates[i].low <= lo + tol)
+      if(win[i].low <= lo + tol)
          touchLo++;
      }
+  }
+
+//--- rebotes: cuántas veces el precio pasa de tocar un borde a tocar el otro. Una vela que toca
+//    ambos bordes cuenta en el orden de su dirección (alcista: suelo->techo, bajista: techo->suelo).
+//    Una tendencia sólo cambia de lado una vez; una acumulación va y vuelve varias veces.
+int CountRebounds(const MqlRates &win[],const int first,const int n,const double hi,const double lo)
+  {
+   double tol     = (hi - lo)*TouchZonePercent/100.0;
+   int    last    = 0;   // +1 techo, -1 suelo
+   int    changes = 0;
+   for(int i=first; i<n; i++)
+     {
+      bool touchTop = (win[i].high >= hi - tol);
+      bool touchBot = (win[i].low  <= lo + tol);
+      int  sides[2] = {0,0};
+      int  count = 0;
+      if(touchTop && touchBot)
+        {
+         bool bullish = (win[i].close >= win[i].open);
+         sides[0] = bullish ? -1 : 1;
+         sides[1] = bullish ? 1 : -1;
+         count    = 2;
+        }
+      else if(touchTop)
+        { sides[0] = 1;  count = 1; }
+      else if(touchBot)
+        { sides[0] = -1; count = 1; }
+      for(int j=0; j<count; j++)
+        {
+         if(last!=0 && sides[j]!=last)
+            changes++;
+         last = sides[j];
+        }
+     }
+   return changes;
   }
 
 //--- actualización en vivo mientras se forma (sólo visual/panel)
 void UpdateLiveAccumulation(const datetime now)
   {
-   MqlRates rates[];
+   MqlRates rates[], win[];
    int copied = CopyRates(_Symbol,SignalTimeframe,g_srvAccStart,now,rates);
    if(copied<=0)
       return;
-   double hi = 0.0, lo = 0.0;
-   if(ComputeZone(rates,copied,hi,lo)==0)
+   int n = WindowBars(rates,copied,win);
+   if(n==0)
       return;
+   double hi = 0.0, lo = 0.0;
+   int first = 0;
+   g_accCandles = FindAccumulation(win,n,hi,lo,first);
+   if(g_accCandles==0)
+      return;
+   g_srvBoxStart = win[first].time;
    g_accHigh     = hi;
    g_accLow      = lo;
    g_accRangePts = PriceToPoints(hi-lo);
-   CountTouches(rates,copied,hi,lo,g_touchHigh,g_touchLow);
-   DrawAccumulation(hi,lo,g_accRangePts <= MaxAccumulationPoints + 1e-9);
+   CountTouches(win,first,n,hi,lo,g_touchHigh,g_touchLow);
+   g_rebounds    = CountRebounds(win,first,n,hi,lo);
+   DrawAccumulation(hi,lo,g_accCandles >= MinAccumCandles && g_touchHigh >= MinTouches &&
+                    g_touchLow >= MinTouches && g_rebounds >= MinRebounds);
   }
 
 //--- construye la acumulación definitiva con las velas cerradas de la ventana
 //    devuelve false si debe reintentarse en el próximo tick (historial sincronizando)
 bool BuildAccumulation(const datetime now)
   {
-   MqlRates rates[];
+   MqlRates rates[], win[];
    int copied   = CopyRates(_Symbol,SignalTimeframe,g_srvAccStart,g_srvAccEnd-1,rates);
    int expected = (int)(((long)g_srvAccEnd - (long)g_srvAccStart)/g_tfSeconds);
-   double hi = 0.0, lo = 0.0;
-   int count = (copied > 0) ? ComputeZone(rates,copied,hi,lo) : 0;
+   int n        = (copied > 0) ? WindowBars(rates,copied,win) : 0;
 
-   if(count < expected)
+   if(n < expected)
      {
       // El historial puede tardar en sincronizar: se reintenta durante la primera vela posterior
       if(now < g_srvAccEnd + g_tfSeconds)
          return false;
       g_accBuilt = true;
       g_accValid = false;
-      PrintFormat("[NAE] Acumulación incompleta: %d de %d velas encontradas",count,expected);
+      PrintFormat("[NAE] Acumulación incompleta: %d de %d velas encontradas",n,expected);
       LockDay("ACCUMULATION_INCOMPLETE");
       return true;
      }
 
-   CountTouches(rates,copied,hi,lo,g_touchHigh,g_touchLow);
+   double hi = 0.0, lo = 0.0;
+   int    first   = 0;
+   int    candles = FindAccumulation(win,n,hi,lo,first);
+   string failReason = "";
+   if(candles==0)
+     {
+      // Ni la última vela cabe en el máximo: se muestra la última vela como referencia
+      failReason = "INVALID_RANGE";
+      first = n-1;
+      hi    = BarTop(win,first);
+      lo    = BarBottom(win,first);
+     }
+   CountTouches(win,first,n,hi,lo,g_touchHigh,g_touchLow);
+   g_rebounds = CountRebounds(win,first,n,hi,lo);
+   if(failReason=="" && candles < MinAccumCandles)
+      failReason = "ACCUMULATION_TOO_SHORT";
+   else if(failReason=="" && (g_touchHigh < MinTouches || g_touchLow < MinTouches || g_rebounds < MinRebounds))
+      failReason = "NOT_ENOUGH_REBOUNDS";
+
    g_accBuilt    = true;
+   g_accValid    = (failReason=="");
+   g_accCandles  = candles;
+   g_srvBoxStart = win[first].time;
    g_accHigh     = hi;
    g_accLow      = lo;
    g_accRangePts = PriceToPoints(hi-lo);
 
-   string failReason = "";
-   if(hi <= lo || g_accRangePts > MaxAccumulationPoints + 1e-9)
-      failReason = "INVALID_RANGE";
-   else if(g_touchHigh < MinTouches || g_touchLow < MinTouches)
-      failReason = "NOT_ENOUGH_REBOUNDS";
-   g_accValid = (failReason=="");
-
-   PrintFormat("[NAE] Acumulación %s NY (%s): high=%s low=%s rango=%s pts (máx %s) | toques techo=%d suelo=%d (mín %d) => %s",
-               TimeToString(g_nyDay,TIME_DATE),UseCandleBodies ? "cuerpos" : "mechas",Px(hi),Px(lo),
-               Pts(g_accRangePts),Pts(MaxAccumulationPoints),g_touchHigh,g_touchLow,MinTouches,
+   PrintFormat("[NAE] Acumulación %s NY (%s): %d velas desde %s (mín %d) | high=%s low=%s rango=%s pts (máx %s) | toques techo=%d suelo=%d (mín %d) | rebotes %d (mín %d) => %s",
+               TimeToString(g_nyDay,TIME_DATE),UseCandleBodies ? "cuerpos" : "mechas",candles,
+               TimeToString(ServerToNewYork(g_srvBoxStart),TIME_MINUTES),MinAccumCandles,Px(hi),Px(lo),
+               Pts(g_accRangePts),Pts(MaxAccumulationPoints),g_touchHigh,g_touchLow,MinTouches,g_rebounds,MinRebounds,
                g_accValid ? "VÁLIDA" : "INVÁLIDA ("+failReason+")");
    DrawAccumulation(hi,lo,g_accValid);
 
@@ -1471,6 +1576,10 @@ bool ValidateInputs()
      { Print("[NAE] RiskReward debe ser mayor que 0."); ok = false; }
    if(MaxAccumulationPoints <= 0.0)
      { Print("[NAE] MaxAccumulationPoints debe ser mayor que 0."); ok = false; }
+   if(tfMin > 0 && (MinAccumCandles < 1 || MinAccumCandles > (accEndMin-startMin)/tfMin))
+     { PrintFormat("[NAE] MinAccumCandles debe estar entre 1 y %d (velas de la ventana).",(accEndMin-startMin)/tfMin); ok = false; }
+   if(MinRebounds < 0 || MinRebounds > 50)
+     { Print("[NAE] MinRebounds debe estar entre 0 y 50."); ok = false; }
    if(MinTouches < 0 || MinTouches > 50)
      { Print("[NAE] MinTouches debe estar entre 0 y 50."); ok = false; }
    if(TouchZonePercent < 0.0 || TouchZonePercent > 50.0)

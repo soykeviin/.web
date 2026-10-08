@@ -14,7 +14,7 @@ Archivo: [`Experts/NasdaqAccumulationEA.mq5`](Experts/NasdaqAccumulationEA.mq5)
 |---|---|---|
 | 00:00 | Nuevo día | Detecta el cambio de fecha **en hora de Nueva York**, reinicia el estado, el contador de operaciones y los dibujos, y guarda el equity inicial del día. |
 | 09:00–09:30 | `BUILDING ACCUMULATION` | Dibuja en vivo el rectángulo con el máximo y el mínimo de las velas M5. |
-| 09:30 | Validación | Con las 6 velas cerradas (09:00…09:25) calcula la zona con los **cuerpos** de las velas: `High` = mayor apertura/cierre y `Low` = menor apertura/cierre, sin mechas. Después cuenta los **rebotes**: velas cuya mecha llega a la franja superior (techo) o inferior (suelo) de la zona. La acumulación es válida si `Range ≤ MaxAccumulationPoints` y hay al menos `MinTouches` toques en el techo **y** en el suelo. Si no, registra `INVALID_RANGE` o `NOT_ENOUGH_REBOUNDS`. Si falta alguna vela, registra `ACCUMULATION_INCOMPLETE`. |
+| 09:30 | Validación | Busca la **acumulación**: el bloque de velas **consecutivas** que termina en la vela de 09:25. Cada vela debe solapar su **cuerpo** (apertura/cierre, sin mechas) con la zona que forman las siguientes, y el rango total no puede superar `MaxAccumulationPoints`. Es válida si: (1) tiene al menos `MinAccumCandles` velas (4); (2) al menos `MinTouches` velas tocan el techo y otras tantas el suelo (mecha incluida, dentro de la franja `TouchZonePercent`); y (3) el precio **rebota** de un borde al otro al menos `MinRebounds` veces. Una tendencia toca ambos bordes, pero solo cambia de lado una vez. Motivos de rechazo: `INVALID_RANGE`, `ACCUMULATION_TOO_SHORT`, `NOT_ENOUGH_REBOUNDS` o, si falta alguna vela, `ACCUMULATION_INCOMPLETE`. |
 | 09:30 → `End` | `WAITING BREAKOUT` | **Tick a tick, sin esperar el cierre de la vela:** en cuanto el precio supera el máximo (al menos 1 tick) → LONG; en cuanto perfora el mínimo → SHORT. Puede ocurrir ya dentro de la vela de 09:30. |
 | Ruptura | Ejecución | En ese mismo tick pasa los 10 filtros de seguridad y abre a mercado con SL y TP en la misma orden. Después verifica la posición y ajusta el TP al precio real de ejecución. |
 | Tras la entrada | `DONE FOR TODAY` | El día queda **bloqueado**: no hay segunda entrada, reentrada tras SL, add-on, grid ni martingala. |
@@ -68,7 +68,9 @@ Todas las distancias en "puntos" (`MaxAccumulationPoints`, `SL_Buffer_Points`, `
 | `PointUnit` | Puntos de índice | `Puntos de índice`: 1 punto = 1.0 de precio (40 pts = 18000 → 18040). `Puntos MT5`: 1 punto = `_Point`. |
 | `MaxAccumulationPoints` | 120 | Rango máximo de la acumulación. Si se supera, no se opera ese día. (Subido de 40 a 120: con el NASDAQ en ~30 000, 40 puntos invalidaba casi todos los días.) |
 | `UseCandleBodies` | true | `true`: la zona se mide con los **cuerpos** de las velas (apertura/cierre), sin mechas. `false`: con máximos y mínimos completos. |
-| `MinTouches` | 2 | Mínimo de velas que deben tocar el techo **y** mínimo que deben tocar el suelo de la zona (rebotes). Las velas que definen los extremos cuentan, así que con 2 hace falta al menos otro rebote en cada lado. `0` desactiva el filtro. |
+| `MinAccumCandles` | 4 | Mínimo de velas consecutivas que forman la acumulación (máximo 6 con la ventana 09:00–09:30 en M5). |
+| `MinTouches` | 2 | Mínimo de velas que tocan el techo **y** mínimo que tocan el suelo. `0` desactiva el filtro. |
+| `MinRebounds` | 2 | Mínimo de veces que el precio pasa de un borde al otro (p. ej. techo → suelo → techo = 2). Una vela que toca ambos bordes cuenta en el orden de su dirección. `0` desactiva el filtro. |
 | `TouchZonePercent` | 20 | Franja de toque: una vela toca el techo si su máximo (mecha incluida) llega a menos del X% del rango del borde superior; igual para el suelo. |
 | `SL_Buffer_Points` | 1.0 | Distancia extra del SL por fuera del extremo de la acumulación. |
 | `RiskReward` | 2.0 | Relación beneficio/riesgo del TP (2.0 = 1:2). |
@@ -79,7 +81,8 @@ Todas las distancias en "puntos" (`MaxAccumulationPoints`, `SL_Buffer_Points`, `
 | `Slippage` | 3.0 | Desviación máxima de precio aceptada al ejecutar. |
 | `DrawObjects` | true | Dibuja el rectángulo, el máximo y el mínimo, la entrada, el SL, el TP, la señal y el resultado. |
 | `ShowPanel` | true | Panel informativo. |
-| `KeepPreviousDrawings` | false | `false`: borra los dibujos del día anterior al cambiar de día. |
+| `KeepPreviousDrawings` | false | `false`: borra los dibujos del día anterior al cambiar de día. Pon `true` para revisar todas las acumulaciones al terminar un backtest visual. |
+| `AccumBoxColor` / `InvalidBoxColor` / `AccumBorderColor` | marrón claro / gris / gris oscuro | Colores del **cuadro de acumulación**: relleno si es válida, relleno si no lo es, y borde. |
 | `WriteCSVLog` | true | Guarda el registro en `Common\Files\<CSVFileName>`. Se desactiva solo durante la optimización. |
 | `CSVFileName` | `NasdaqAccumulationEA_log.csv` | Nombre del CSV. |
 
@@ -113,7 +116,7 @@ Todas las distancias en "puntos" (`MaxAccumulationPoints`, `SL_Buffer_Points`, `
 3. Modelado: **"Cada tick basado en ticks reales"**. Es imprescindible, porque la entrada es intravela: el precio exacto de la ruptura y el spread real determinan la entrada y el lotaje. "1 minuto OHLC" solo sirve como aproximación rápida. **No uses "Solo precios de apertura"**: no simula la ruptura dentro de la vela.
 4. Fechas: al menos 1–2 años. Depósito y apalancamiento iguales a los de tu cuenta.
 5. En *Parámetros*, configura `ServerGMTOffset` y `ServerDSTMode` del broker cuyos datos estás usando.
-6. Activa **Visualización** para ver el rectángulo, los niveles y el panel. Sin visualización no se dibuja nada, lo que acelera el test.
+6. Activa **Visualización** para ver el cuadro de acumulación, los niveles y el panel. **Sin visualización no se dibuja nada**, lo que acelera el test. El cuadro se dibuja sobre las velas que forman la acumulación (de la primera a las 09:30 NY), con una etiqueta que indica el número de velas, el rango y los rebotes.
 7. Al terminar:
    - Pestaña **Diario**: líneas `[NAE] … TRADE_OPEN / TRADE_CLOSE / NO_TRADE` con el motivo de cada día.
    - CSV en `…\Terminal\Common\Files\NasdaqAccumulationEA_log.csv` (separador `;`). Borra el CSV entre tests si quieres un registro limpio, porque el EA añade al final del archivo.
@@ -140,7 +143,8 @@ Cuando rechaza una entrada imprime una línea `Entrada LONG/SHORT RECHAZADA: <mo
 | `INSUFFICIENT_MARGIN` | Con `RiskPercent = 10` y un SL de unos 40 puntos, la posición necesaria vale unas **50 veces el equity**. Muchos brokers apalancan el NASDAQ a 1:20–1:50, así que el margen no alcanza. | Baja `RiskPercent` (p. ej. 1–2%), sube el apalancamiento del test o activa `AdjustLotToLimits`. |
 | `INVALID_LOT_SIZE` | El lote supera el máximo del broker o queda por debajo del mínimo (cuenta pequeña). | Activa `AdjustLotToLimits` (máximo) o aumenta el depósito (mínimo). |
 | `INVALID_RANGE` | La acumulación de 09:00–09:30 supera `MaxAccumulationPoints`. Con el NASDAQ por encima de 20 000, rangos de más de 40 puntos son frecuentes. | Confirma que es el comportamiento deseado o sube `MaxAccumulationPoints`. |
-| `NOT_ENOUGH_REBOUNDS` | El precio no rebotó suficientes veces en el techo y en el suelo de la zona: fue una tendencia, no una acumulación. | Comportamiento esperado. Para ser más o menos exigente, ajusta `MinTouches` o `TouchZonePercent`. |
+| `NOT_ENOUGH_REBOUNDS` | El precio no tocó o no rebotó suficientes veces entre techo y suelo: fue una tendencia, no una acumulación. | Comportamiento esperado. Para ser más o menos exigente, ajusta `MinTouches`, `MinRebounds` o `TouchZonePercent`. |
+| `ACCUMULATION_TOO_SHORT` | Menos de `MinAccumCandles` velas consecutivas antes de las 09:30 forman la zona. | Comportamiento esperado, o baja `MinAccumCandles`. |
 | `SPREAD_TOO_HIGH` | Spread por encima de `MaxSpreadPoints` en el momento de la ruptura. | Revisa el spread del símbolo o del test y sube `MaxSpreadPoints`. |
 | `TRADING_DISABLED` | Trading algorítmico desactivado en el terminal o en las propiedades del EA (solo en cuenta real o demo). | Activa ambos. |
 | `BREAKOUT_MISSED` | El EA se inició o reinició después de que el precio ya hubiera roto la zona. | Normal: no entra tarde. |
