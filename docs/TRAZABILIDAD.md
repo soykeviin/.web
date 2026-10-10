@@ -1,4 +1,4 @@
-# Matriz de trazabilidad — GG_LondonSweepFVG v1.00
+# Matriz de trazabilidad — GG_LondonSweepFVG v1.10
 
 Estados: **Implementado** (código escrito y auditado; pendiente de compilar y probar en MT5) · **Verificado (modelo)** (lógica comprobada con `tests/reference_model.py`) · **Fuera de alcance** (excluido con aprobación) · **Sustituido** (reemplazado por una decisión aprobada).
 
@@ -11,7 +11,7 @@ Las pruebas TP-xx están definidas en `docs/PRUEBAS_Y_VALIDACION.md`.
 | R03 | 08:00–11:00 Madrid (§11) | 09:00–11:00 Madrid para crear setups | `ComputeSession` | TP-13; modelo | Sustituido (P1) / Verificado (modelo) |
 | R04 | Tendencia M15 o M30 | M15 | `ComputeSignal` | TP-03 | Implementado |
 | R05 | Bajo EMA20 → ventas; sobre EMA20 → compras | Cierre shift 1 vs EMA20 shift 1 | `ComputeSignal` | TP-03 | Implementado |
-| R06/R07 | "Diagonal" / pendiente EMA | Sin filtro de pendiente (Q4: solo posición vs EMA) | — | TP-03 | Sustituido (Q4) |
+| R06/R07 | "Diagonal" / pendiente EMA | EMA20[1] frente a EMA20[1+N], N = 3 (D14) | `ComputeSignal` | TP-03; simulador | Implementado (v1.10) |
 | R08 | Ejecución M5 | FVG y señal en M15 (Q5) | — | — | Sustituido (Q5) |
 | R09 | Venta: máximo → barrida → imbalance → sell limit | FVG entero sobre el swing high + sell limit en su borde inferior | `ComputeSignal`, `TryPlaceSetup` | TP-04, TP-05, TP-06 | Implementado |
 | R10 | Compra: simétrico | Ídem con swing low y buy limit | `ComputeSignal`, `TryPlaceSetup` | TP-04, TP-05, TP-06 | Implementado |
@@ -22,7 +22,7 @@ Las pruebas TP-xx están definidas en `docs/PRUEBAS_Y_VALIDACION.md`.
 | R15 | Pivote K=3 en M15 | `InpPivotK` = 3, comparación estricta | `FindSwingHigh/Low` | TP-04 | Implementado |
 | R16 | Definición FVG | `Low[a] > High[c]` / `High[a] < Low[c]` | `ComputeSignal` | TP-05 | Implementado |
 | R17 | L1 en borde del FVG | Borde cercano (D09) | `BuildPlan` | TP-07; modelo | Verificado (modelo) |
-| R18/R19 | L2 algo más lejos | Borde lejano + `InpLimit2Buffer` (P6) | `BuildPlan` | TP-07; modelo | Verificado (modelo) |
+| R18/R19 | L2 algo más lejos | Borde lejano + 50 % de la altura del FVG (D15) | `BuildPlan` | TP-07; modelo; simulador | Verificado (modelo) |
 | R20/R21 | 3 + 3 MNQ | Volumen por riesgo, 50/50 (D08, P5) | `BuildPlan`, `NormalizeVolumeDown` | TP-07; modelo | Sustituido (Q8) / Verificado (modelo) |
 | R22 | Una sola promediada | Exactamente 2 órdenes por día | `PlaceSetup`, `OnTick` paso 5 | TP-12 | Implementado |
 | R23 | −800 → cerrar todo y cancelar | SL en servidor a riesgo total ≤ 800; tras una salida, `FlattenAll` | `BuildPlan`, `OnTick` paso 3 | TP-10, TP-08 | Implementado / Verificado (modelo) |

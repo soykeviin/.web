@@ -167,17 +167,17 @@ def round_tick(p, tick):
 
 
 def build_plan(direction, zone_low, zone_high, vpp, step, vmin=0.01, tick=0.01,
-               risk=800.0, tp=500.0, sl_dist=66.7, buffer=0.0, commission=0.0):
+               risk=800.0, tp=500.0, sl_dist=66.7, l2_pct=50.0, commission=0.0):
     """vpp = valor (divisa de la cuenta) de 1.0 de precio por 1 lote."""
     if direction == "SELL":
-        l1, l2 = round_tick(zone_low, tick), round_tick(zone_high + buffer, tick)
+        l1, l2 = round_tick(zone_low, tick), round_tick(zone_high + (zone_high - zone_low) * l2_pct / 100, tick)
         avg = (l1 + l2) / 2
         sl = floor_tick(avg + sl_dist, tick)
         if sl <= l2:
             return {"error": "FVG demasiado ancho: SL no queda más allá de L2"}
         loss_pair = (sl - l1) * vpp + (sl - l2) * vpp
     else:
-        l1, l2 = round_tick(zone_high, tick), round_tick(zone_low - buffer, tick)
+        l1, l2 = round_tick(zone_high, tick), round_tick(zone_low - (zone_high - zone_low) * l2_pct / 100, tick)
         avg = (l1 + l2) / 2
         sl = ceil_tick(avg - sl_dist, tick)
         if sl >= l2:
@@ -219,9 +219,9 @@ def verify_plans():
                   f"TP1={p['TP1']:.2f}, TP2={p['TP2']:.2f}, riesgo={p['riesgo_ambas_llenas']:.2f}, "
                   f"+L1={p['beneficio_solo_L1_en_TP1']:.2f}, +ambas={p['beneficio_ambas_en_TP2']:.2f} "
                   f"{'OK' if cond else 'FALLO'}")
-    wide = build_plan("SELL", 21000.0, 21140.0, 1.0, 0.01)
+    wide = build_plan("SELL", 21000.0, 21100.0, 1.0, 0.01)
     ok &= "error" in wide
-    print("  FVG de 140 puntos:", wide.get("error", "NO RECHAZADO (FALLO)"))
+    print("  FVG de 100 puntos (L2 a +150):", wide.get("error", "NO RECHAZADO (FALLO)"))
     return ok
 
 

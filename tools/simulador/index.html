@@ -127,7 +127,7 @@ legend { font-size: 12px; font-weight: 700; padding: 0 6px; text-transform: uppe
   <header class="topbar">
     <div class="title">
       <h1>Replay GG London</h1>
-      <span class="sub">Réplica de la lógica del EA GG_LondonSweepFVG v1.00 · sesgo EMA20 M15 · FVG M15 · L1 + L2 · SL −800 / TP +500</span>
+      <span class="sub">Réplica de la lógica del EA GG_LondonSweepFVG v1.10 · sesgo EMA20 M15 con pendiente · FVG M15 · L1 + L2 (50 % del FVG) · SL −800 / TP +500</span>
     </div>
     <span class="spacer"></span>
     <span id="dataBadge" class="badge synthetic">Datos sintéticos de demostración</span>
@@ -198,7 +198,7 @@ legend { font-size: 12px; font-weight: 700; padding: 0 6px; text-transform: uppe
         <h2>Estado del EA</h2>
         <dl class="kv">
           <dt>Sesgo</dt><dd id="stBias">—</dd>
-          <dt>Cierre / EMA20</dt><dd id="stEma">—</dd>
+          <dt>Cierre / EMA20 (pendiente)</dt><dd id="stEma">—</dd>
           <dt>Swing</dt><dd id="stSwing">—</dd>
           <dt>FVG válidos</dt><dd id="stZones">—</dd>
           <dt>Setup del día</dt><dd id="stDay">—</dd>
@@ -263,7 +263,8 @@ legend { font-size: 12px; font-weight: 700; padding: 0 6px; text-transform: uppe
             <label>Velas a cada lado del swing (K)<input id="p_pivotK" type="number" step="1" min="1"></label>
             <label>Velas M15 para buscar el swing<input id="p_lookback" type="number" step="1" min="10"></label>
             <label>Antigüedad máxima FVG (h)<input id="p_fvgAgeH" type="number" step="1" min="1"></label>
-            <label>Margen de L2 más allá del FVG<input id="p_l2Buffer" type="number" step="0.1" min="0"></label>
+            <label>Velas para la pendiente de la EMA<input id="p_emaSlope" type="number" step="1" min="1"></label>
+            <label>L2 más allá del FVG (% de su altura)<input id="p_l2Pct" type="number" step="5" min="0"></label>
           </div>
         </fieldset>
         <fieldset>
@@ -314,7 +315,7 @@ legend { font-size: 12px; font-weight: 700; padding: 0 6px; text-transform: uppe
 // ------------------------------------------------------------------ parámetros (= inputs del EA)
 const DEFAULTS = {
   riskMoney: 800, tpMoney: 500, slDist: 66.7, commission: 0, balance: 50000,
-  emaPeriod: 20, pivotK: 3, lookback: 200, fvgAgeH: 3, l2Buffer: 0,
+  emaPeriod: 20, emaSlope: 3, pivotK: 3, lookback: 200, fvgAgeH: 3, l2Pct: 50,
   start: "9:00", setupEnd: "11:00", nyCut: "9:30", srvWinter: 2, srvDst: "US",
   vpp: 1, tick: 0.01, pointSize: 0.01, volMin: 0.01, volStep: 0.01, volMax: 100,
   stopsLevel: 0, fixedSpread: 1.0, maxSpread: 0
@@ -567,14 +568,14 @@ class Engine {
   computeSignal() {
     this.signal = { ready: false, bias: 0 }; this.zones = [];
     const all = this.tf[15].arr, K = P.pivotK;
-    if (all.length < Math.max(60, P.emaPeriod * 3) || this.ema.length !== all.length) { this.logOnce("Calentando la EMA M15 (datos insuficientes); se reintentará"); return; }
+    if (all.length < Math.max(60, P.emaPeriod * 3, P.emaSlope + 2) || this.ema.length !== all.length) { this.logOnce("Calentando la EMA M15 (datos insuficientes); se reintentará"); return; }
     const n = Math.min(P.lookback, all.length);
     if (n < 2 * K + 3) { this.logOnce(`Datos M15 insuficientes (${n} velas)`); return; }
     const r = []; for (let j = 0; j < n; j++) r.push(all[all.length - 1 - j]);   // r[0] = última vela cerrada
-    const ema = this.ema[this.ema.length - 1], close = r[0].c;
-    const bias = close > ema ? 1 : close < ema ? -1 : 0;
-    this.signal = { ready: true, bias, close, ema };
-    if (bias === 0) { this.log(`Sesgo: ninguno (cierre M15 ${px(close)} = EMA${P.emaPeriod} ${px(ema)})`); return; }
+    const ema = this.ema[this.ema.length - 1], emaPast = this.ema[this.ema.length - 1 - P.emaSlope], close = r[0].c;
+    const bias = close > ema && ema > emaPast ? 1 : close < ema && ema < emaPast ? -1 : 0;   // D14: precio y pendiente de acuerdo
+    this.signal = { ready: true, bias, close, ema, emaPast };
+    if (bias === 0) { this.log(`Sesgo: ninguno (cierre M15 ${px(close)}, EMA${P.emaPeriod} ${px(ema)}, EMA hace ${P.emaSlope} velas ${px(emaPast)}: precio y pendiente no coinciden)`); return; }
     let level = null, when = 0;
     for (let i = K; i < n - K && level == null; i++) {
       let pivot = true;
@@ -596,7 +597,7 @@ class Engine {
       if (lo == null) continue;
       if (bias < 0 ? lo > level : hi < level) this.zones.push({ low: lo, high: hi, formed, start: r[i + 2].t });
     }
-    this.log(`Sesgo ${bias < 0 ? "BAJISTA" : "ALCISTA"} (cierre ${px(close)} vs EMA${P.emaPeriod} ${px(ema)}) | swing ${bias < 0 ? "high" : "low"} ${px(level)} @ ${fmtHM(when)} | FVG válidos: ${this.zones.length}`);
+    this.log(`Sesgo ${bias < 0 ? "BAJISTA" : "ALCISTA"} (cierre ${px(close)} vs EMA${P.emaPeriod} ${px(ema)}, EMA ${bias < 0 ? "bajando" : "subiendo"}) | swing ${bias < 0 ? "high" : "low"} ${px(level)} @ ${fmtHM(when)} | FVG válidos: ${this.zones.length}`);
   }
 
   // --- selección y plan (port de TryPlaceSetup/BuildPlan)
@@ -621,11 +622,11 @@ class Engine {
     const p = { dir };
     let avg;
     if (dir < 0) {
-      p.l1 = roundTick(z.low); p.l2 = roundTick(z.high + P.l2Buffer); avg = (p.l1 + p.l2) / 2; p.sl = floorTick(avg + P.slDist);
+      p.l1 = roundTick(z.low); p.l2 = roundTick(z.high + (z.high - z.low) * P.l2Pct / 100); avg = (p.l1 + p.l2) / 2; p.sl = floorTick(avg + P.slDist);
       if (p.l2 <= p.l1) return { error: "L2 no queda por encima de L1" };
       if (p.sl - p.l2 < minDist || p.sl <= p.l2) return { error: `FVG demasiado ancho: el SL (${px(p.sl)}) no queda por encima de L2 (${px(p.l2)})` };
     } else {
-      p.l1 = roundTick(z.high); p.l2 = roundTick(z.low - P.l2Buffer); avg = (p.l1 + p.l2) / 2; p.sl = ceilTick(avg - P.slDist);
+      p.l1 = roundTick(z.high); p.l2 = roundTick(z.low - (z.high - z.low) * P.l2Pct / 100); avg = (p.l1 + p.l2) / 2; p.sl = ceilTick(avg - P.slDist);
       if (p.l2 >= p.l1) return { error: "L2 no queda por debajo de L1" };
       if (p.l2 - p.sl < minDist || p.sl >= p.l2) return { error: `FVG demasiado ancho: el SL (${px(p.sl)}) no queda por debajo de L2 (${px(p.l2)})` };
     }
@@ -1020,7 +1021,7 @@ function renderState() {
 
   const sig = e.signal;
   $("stBias").innerHTML = !sig.ready ? '<span class="pill idle">sin calcular</span>' : sig.bias < 0 ? '<span class="pill sell">Bajista · ventas</span>' : sig.bias > 0 ? '<span class="pill buy">Alcista · compras</span>' : '<span class="pill idle">Ninguno</span>';
-  $("stEma").textContent = sig.ready ? `${px(sig.close)} / ${px(sig.ema)}` : "—";
+  $("stEma").textContent = sig.ready ? `${px(sig.close)} / ${px(sig.ema)} ${sig.emaPast == null ? "" : sig.ema > sig.emaPast ? "↗" : sig.ema < sig.emaPast ? "↘" : "→"}` : "—";
   $("stSwing").textContent = sig.swing != null ? `${px(sig.swing)} @ ${fmtHM(sig.swingTime)}` : "—";
   $("stZones").textContent = sig.ready ? String(e.zones.length) : "—";
   const d = e.day;
@@ -1232,6 +1233,9 @@ if (mq.addEventListener) mq.addEventListener("change", onTheme);
 new MutationObserver(onTheme).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
 window.addEventListener("resize", () => { drawChart(); drawEquity(); });
 document.fonts && document.fonts.ready.then(() => drawChart());
+
+// acceso de diagnóstico desde la consola del navegador
+window.__replay = { get engine() { return engine; }, get params() { return P; } };
 
 // arranque: datos de demostración en un estado de trabajo
 fillParams();

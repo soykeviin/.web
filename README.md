@@ -18,10 +18,10 @@ Versión mecánica aprobada de la estrategia de Gerard García (barrida de máxi
 ## 2. Qué hace
 
 - **Ventana:** de lunes a viernes, desde las 09:00 de Madrid. Crea setups solo hasta las 11:00 de Madrid. A las 09:30 de Nueva York (llegada de NY) cancela las pendientes y cierra todo.
-- **Sesgo:** cierre de la última vela M15 cerrada frente a la EMA20 de M15.
+- **Sesgo:** compras si la última vela M15 cerró por encima de la EMA20 y la EMA sube respecto a hace 3 velas; ventas a la inversa. Si precio y pendiente no coinciden, no se opera.
 - **Setup:** FVG de M15 de las últimas 3 horas, situado entero por encima del último swing high (ventas) o por debajo del último swing low (compras). Se usa el más cercano al precio.
 - **Órdenes:**
-  - L1 en el borde cercano del FVG y L2 en el borde lejano, con el mismo volumen.
+  - L1 en el borde cercano del FVG y L2 más allá del borde lejano, a un 50 % de la altura del FVG, con el mismo volumen.
   - El SL es único, a 66,7 puntos del precio medio.
   - El volumen se calcula para perder como máximo 800 USD con ambas llenas.
   - TP de +500 USD: TP1 si solo entra L1; TP2 combinado si entran las dos.

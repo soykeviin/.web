@@ -1,4 +1,4 @@
-# Especificación técnica definitiva — GG_LondonSweepFVG v1.00
+# Especificación técnica definitiva — GG_LondonSweepFVG v1.10
 
 Fuente: `estrategia_gerard_garcia_apex.md` (resumen del vídeo de Gerard García, "Retirar $75.000 de Apex en 1 mes").
 Estado: **aprobada** por el usuario (Q1–Q15 y P1–P9).
@@ -35,10 +35,12 @@ Etiquetas: **[EXP]** explícito en el documento · **[AUT]** propuesta del autor
 | P3 | FVG de cualquier dirección (alcista o bajista); el límite de 3 h aplica al FVG; el swing es el último pivote confirmado | P3 |
 | P4 | SL a 66,7 puntos del precio medio de L1/L2 (equivalente al ejemplo del §11: 6 MNQ × 2 $/pt, −800 $) | P4 |
 | P5 | Volumen 50 % / 50 % entre L1 y L2 | P5 |
-| P6 | L2 exactamente en el borde lejano del FVG (margen configurable, por defecto 0) | P6 |
+| P6 | ~~L2 exactamente en el borde lejano del FVG~~ → sustituido por D15 | P6 |
 | P7 | La comisión entra en el cálculo del volumen (por defecto 0) | P7 |
 | P8 | Filtro de spread máximo disponible, desactivado por defecto | P8 |
 | P9 | Racha de días en pérdida y consistencia 50 %: solo registro, sin bloqueo | P9 |
+| D14 | **(v1.10)** El sesgo exige además la pendiente de la EMA20: compras solo si la EMA de la última vela cerrada es mayor que la de hace N velas M15 (ventas: menor). N = 3 por defecto (`InpEmaSlopeBars`). Motivo: el sesgo solo por posición frente a la EMA producía compras en retrocesos de un escenario bajista | Revisión del usuario tras el simulador |
+| D15 | **(v1.10)** L2 se coloca más allá del borde lejano del FVG a un 50 % de su altura (`InpLimit2FvgPct`); sustituye a P6 | Revisión del usuario tras el simulador |
 
 Deducciones técnicas aprobadas: T1 FVG entero más allá del swing · T2 FVG más cercano al precio · T3 se descarta un FVG si la limit sería inválida · T4 solo velas cerradas · T5 recuperación por número mágico/historial · T6 netting y hedging · T7 si el servidor rechaza una orden, se cancela la otra y el día termina.
 
@@ -50,7 +52,9 @@ VENTANA (hora de Madrid, lunes–viernes)
   crear setup ⇔ 09:00 Madrid ≤ t < 11:00 Madrid (y antes de 09:30 NY)
 
 SESGO (M15, vela cerrada shift 1)
-  +1 ⇔ Close > EMA20 ;  −1 ⇔ Close < EMA20 ; 0 en otro caso → no operar
+  +1 ⇔ Close > EMA20[1] ∧ EMA20[1] > EMA20[1+N]
+  −1 ⇔ Close < EMA20[1] ∧ EMA20[1] < EMA20[1+N]      (N = 3)
+   0 en otro caso → no operar
 
 SWING (M15, velas cerradas, K = 3)
   ventas : último High[i] > High[i±1..K]
@@ -67,8 +71,8 @@ SELECCIÓN (cada tick hasta colocar)
   compras: FVG con L1 = zona.high < Ask − stops level, el de L1 máximo
 
 PLAN (ventas; compras simétrico)
-  L1 = zona.low ; L2 = zona.high + margen ; medio = (L1+L2)/2
-  SL = medio + 66,7  (mismo SL en ambas órdenes; exige SL > L2)
+  L1 = zona.low ; L2 = zona.high + 50 % · (zona.high − zona.low) ; medio = (L1+L2)/2
+  SL = medio + 66,7  (mismo SL en ambas órdenes; exige SL > L2 → FVG de hasta ~88 puntos)
   v  = 800 / (pérdida_1lote(L1→SL) + pérdida_1lote(L2→SL) + 4·comisión)  → hacia abajo al paso de lote
   TP1 = L1 − 500 / (v · valor_punto)         (TP de L1 mientras L2 está pendiente)
   TP2 = medio − 500 / (2v · valor_punto)     (TP de L2 y, al llenarse L2, también de L1)
@@ -107,10 +111,11 @@ SALIDA
 | `InpSlDistance` | 66,7 | P4 |
 | `InpCommissionPerLotSide` | 0 | P7 (introducir la comisión real de la cuenta) |
 | `InpEmaPeriod` | 20 | R05 |
+| `InpEmaSlopeBars` | 3 | D14 |
 | `InpPivotK` | 3 | §11 |
 | `InpSwingLookbackBars` | 200 | Técnico (límite de búsqueda) |
 | `InpFvgMaxAgeHours` | 3 | D05 |
-| `InpLimit2Buffer` | 0 | P6 |
+| `InpLimit2FvgPct` | 50 | D15 |
 | `InpStartHourMadrid:Minute` | 09:00 | P1 |
 | `InpSetupEndHourMadrid:Minute` | 11:00 | P1/§11 |
 | `InpNyCutoffHour:Minute` | 09:30 (NY) | P1 |

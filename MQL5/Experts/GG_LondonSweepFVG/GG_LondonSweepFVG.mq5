@@ -2,11 +2,12 @@
 //|                                            GG_LondonSweepFVG.mq5  |
 //|                                                                    |
 //|  Versión mecánica aprobada de la estrategia de Gerard García:      |
-//|   - Sesgo: cierre M15 vs EMA20 M15 (se reevalúa en cada vela).     |
+//|   - Sesgo: cierre M15 vs EMA20 M15 + pendiente de la EMA en N      |
+//|     velas (se reevalúa en cada vela).                              |
 //|   - Setup: FVG M15 (últimas 3 h) situado entero más allá del       |
 //|     último swing high (ventas) / swing low (compras).              |
 //|   - Ejecución: L1 en el borde cercano del FVG + L2 (promediada)    |
-//|     en el borde lejano, mismo volumen.                             |
+//|     más allá del borde lejano (50 % de la altura), mismo volumen.  |
 //|   - Riesgo: SL único en el servidor, volumen calculado para que    |
 //|     la pérdida total (ambas llenas + comisión) sea <= 800 USD.     |
 //|   - Salida: TP +500 USD en total (servidor), cierre de todo al     |
@@ -16,7 +17,7 @@
 //|  Referencias de requisitos (R/D/T/P) en docs/TRAZABILIDAD.md.      |
 //+------------------------------------------------------------------+
 #property copyright   "soykeviin"
-#property version     "1.00"
+#property version     "1.10"
 #property description "Barrida + FVG M15 con sesgo EMA20 M15, sesión de Londres."
 #property description "Dos limits (L1 + promediada), SL -800 / TP +500 USD en total."
 #property description "Máximo un setup por día. Cierre total en la llegada de NY."
@@ -40,12 +41,13 @@ input double InpTakeProfitMoney       = 500.0; // Beneficio objetivo total (divi
 input double InpSlDistance            = 66.7;  // Distancia del SL desde el precio medio (en precio)
 input double InpCommissionPerLotSide  = 0.0;   // Comisión por lote y lado (para el cálculo del volumen)
 
-input group "Señal (D04, D05, D13, P3)"
+input group "Señal (D04, D05, D13, D14, D15, P3)"
 input int    InpEmaPeriod             = 20;    // Periodo EMA (M15)
+input int    InpEmaSlopeBars          = 3;     // Pendiente: la EMA debe subir (compras) o bajar (ventas) frente a hace N velas M15
 input int    InpPivotK                = 3;     // Velas a cada lado para el swing (M15)
 input int    InpSwingLookbackBars     = 200;   // Velas M15 máximas para buscar el swing
 input int    InpFvgMaxAgeHours        = 3;     // Antigüedad máxima del FVG (horas)
-input double InpLimit2Buffer          = 0.0;   // Margen de L2 más allá del borde lejano del FVG (en precio)
+input double InpLimit2FvgPct          = 50.0;  // L2 más allá del borde lejano del FVG, en % de la altura del FVG
 
 input group "Horario (D03, D07, D10, P1, P2)"
 input int    InpStartHourMadrid       = 9;     // Inicio de la ventana: hora (Madrid)
@@ -693,7 +695,7 @@ void ComputeSignal()
    g_signal.bias  = 0;
    ArrayResize(g_zones, 0);
 
-   if(BarsCalculated(g_emaHandle) < InpEmaPeriod + 1)
+   if(BarsCalculated(g_emaHandle) < InpEmaPeriod + InpEmaSlopeBars + 1)
      {
       LogOncePerBar("EMA M15 aún sin calcular; se reintentará");
       return;
@@ -708,9 +710,11 @@ void ComputeSignal()
       return;
      }
 
+   //--- ema[0] = EMA de la última vela cerrada; ema[N] = EMA de N velas antes (D14)
    double ema[];
    ArraySetAsSeries(ema, true);
-   if(CopyBuffer(g_emaHandle, 0, 1, 1, ema) != 1)
+   int emaCount = InpEmaSlopeBars + 1;
+   if(CopyBuffer(g_emaHandle, 0, 1, emaCount, ema) != emaCount)
      {
       LogOncePerBar("No se pudo leer la EMA M15; se reintentará");
       return;
@@ -718,16 +722,18 @@ void ComputeSignal()
 
    g_signal.close = r[0].close;
    g_signal.ema   = ema[0];
-   if(g_signal.close > g_signal.ema)
+   double emaPast = ema[InpEmaSlopeBars];
+   if(g_signal.close > g_signal.ema && g_signal.ema > emaPast)
       g_signal.bias = 1;
    else
-      if(g_signal.close < g_signal.ema)
+      if(g_signal.close < g_signal.ema && g_signal.ema < emaPast)
          g_signal.bias = -1;
 
    g_signal.ready = true;
    if(g_signal.bias == 0)
      {
-      Log(StringFormat("Sesgo: ninguno (cierre M15 %s = EMA%d %s)", Px(g_signal.close), InpEmaPeriod, Px(g_signal.ema)));
+      Log(StringFormat("Sesgo: ninguno (cierre M15 %s, EMA%d %s, EMA hace %d velas %s: precio y pendiente no coinciden)",
+                       Px(g_signal.close), InpEmaPeriod, Px(g_signal.ema), InpEmaSlopeBars, Px(emaPast)));
       return;
      }
 
@@ -785,8 +791,9 @@ void ComputeSignal()
       g_zones[n].formed = formed;
      }
 
-   Log(StringFormat("Sesgo %s (cierre %s vs EMA%d %s) | swing %s %s @ %s | FVG válidos: %d",
+   Log(StringFormat("Sesgo %s (cierre %s vs EMA%d %s, EMA %s) | swing %s %s @ %s | FVG válidos: %d",
                     (g_signal.bias < 0 ? "BAJISTA" : "ALCISTA"), Px(g_signal.close), InpEmaPeriod, Px(g_signal.ema),
+                    (g_signal.bias < 0 ? "bajando" : "subiendo"),
                     (g_signal.bias < 0 ? "high" : "low"), Px(level), TimeToString(when), ArraySize(g_zones)));
   }
 
@@ -804,7 +811,7 @@ bool BuildPlan(const int dir, const FvgZone &z, const MqlTick &tick, const doubl
    if(dir < 0)
      {
       p.l1 = RoundToTick(z.low);
-      p.l2 = RoundToTick(z.high + InpLimit2Buffer);
+      p.l2 = RoundToTick(z.high + (z.high - z.low) * InpLimit2FvgPct / 100.0);   // D15
       avg  = (p.l1 + p.l2) / 2.0;
       p.sl = FloorToTick(avg + InpSlDistance);           // redondeo hacia la entrada: riesgo <= objetivo
       if(p.l2 <= p.l1)
@@ -821,7 +828,7 @@ bool BuildPlan(const int dir, const FvgZone &z, const MqlTick &tick, const doubl
    else
      {
       p.l1 = RoundToTick(z.high);
-      p.l2 = RoundToTick(z.low - InpLimit2Buffer);
+      p.l2 = RoundToTick(z.low - (z.high - z.low) * InpLimit2FvgPct / 100.0);    // D15
       avg  = (p.l1 + p.l2) / 2.0;
       p.sl = CeilToTick(avg - InpSlDistance);
       if(p.l2 >= p.l1)
@@ -1286,8 +1293,10 @@ bool ValidateInputs()
       return InputError("InpSwingLookbackBars demasiado pequeño para InpPivotK");
    if(InpFvgMaxAgeHours < 1)
       return InputError("InpFvgMaxAgeHours debe ser >= 1");
-   if(InpLimit2Buffer < 0.0)
-      return InputError("InpLimit2Buffer no puede ser negativo");
+   if(InpEmaSlopeBars < 1)
+      return InputError("InpEmaSlopeBars debe ser >= 1");
+   if(InpLimit2FvgPct < 0.0)
+      return InputError("InpLimit2FvgPct no puede ser negativo");
    if(InpMaxSpread < 0.0)
       return InputError("InpMaxSpread no puede ser negativo");
    if(!ValidHourMinute(InpStartHourMadrid, InpStartMinuteMadrid) ||

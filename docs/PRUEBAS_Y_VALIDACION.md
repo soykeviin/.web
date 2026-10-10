@@ -1,4 +1,4 @@
-# Pruebas, backtesting y limitaciones — GG_LondonSweepFVG v1.00
+# Pruebas, backtesting y limitaciones — GG_LondonSweepFVG v1.10
 
 ## 1. Qué se ha verificado ya (resultados medidos)
 
@@ -15,8 +15,8 @@ Ejemplo de referencia calculado a mano (para comparar con el log `SETUP ...`), c
 
 ```
 python3 tests/reference_model.py plan SELL 21000 21020 --vpp 1 --step 0.01
-→ L1 21000.00 · L2 21020.00 · SL 21076.70 · 5.99 lotes por orden
-  TP1 20916.52 · TP2 20968.26 · riesgo 799.07 · +500.05 (solo L1) · +500.05 (ambas)
+→ L1 21000.00 · L2 21030.00 (50 % de 20 puntos sobre el FVG) · SL 21081.70 · 5.99 lotes por orden
+  TP1 20916.52 · TP2 20973.26 · riesgo 799.07 · +500.05 (solo L1) · +500.05 (ambas)
 ```
 
 ## 2. Protocolo de pruebas funcionales
@@ -27,7 +27,7 @@ Usa el Strategy Tester en **modo visual**, "Cada tick basado en ticks reales", c
 |---|---|---|---|
 | TP-01 | Compilación | MetaEditor F7 | 0 errores, 0 advertencias |
 | TP-02 | Inicialización y hora del servidor | Arrancar el EA en demo VT Markets | La línea "Hora servidor" coincide con Market Watch; "cierre NY" = 09:30 NY en hora servidor |
-| TP-03 | Sesgo | Revisar cada línea "Sesgo" frente al cierre M15 y la EMA20 | Coincide en el 100 % de las velas revisadas (≥ 20) |
+| TP-03 | Sesgo | Revisar cada línea "Sesgo" frente al cierre M15, la EMA20 y su valor 3 velas antes | Coincide en el 100 % de las velas revisadas (≥ 20); nunca compras con la EMA bajando ni ventas con la EMA subiendo |
 | TP-04 | Swing | Comprobar en el gráfico el pivote K=3 indicado | Es el último pivote confirmado con 3 velas a cada lado |
 | TP-05 | FVG válidos | Comprobar zonas y edad ≤ 3 h | Ningún FVG que no esté entero más allá del swing |
 | TP-06 | Selección y T3 | Días con varios FVG | Se elige el más cercano al precio con limit válida |
