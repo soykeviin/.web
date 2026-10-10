@@ -1,0 +1,1241 @@
+<title>Replay GG London</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: barra de control fija arriba, gráfico grande + panel de estado a la derecha, pestañas de resultados debajo */
+:root {
+  --bg: #f2f4f6;
+  --surface: #ffffff;
+  --surface-2: #eaeef2;
+  --line: #d6dce3;
+  --fg: #15202b;
+  --muted: #5b6a79;
+  --accent: #2c6bd1;
+  --accent-fg: #ffffff;
+  --bull: #0e9a77;
+  --bear: #d4504b;
+  --ema: #c98210;
+  --fvg: #7558d1;
+  --sl: #d03838;
+  --tp: #17955a;
+  --order: #2c6bd1;
+  --band: rgba(44, 107, 209, 0.06);
+  --band-setup: rgba(201, 130, 16, 0.08);
+  --chart-bg: #ffffff;
+  --grid: #edf0f3;
+  --warn-bg: #fff4dc;
+  --warn-fg: #7a5200;
+  --font-ui: "Public Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-data: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0d1218; --surface: #141b23; --surface-2: #1a232e; --line: #283442; --fg: #e3e9ef; --muted: #8e9fb1;
+    --accent: #5a92ef; --accent-fg: #0d1218; --bull: #2cc29a; --bear: #ef716b; --ema: #efae3a; --fvg: #a38af0;
+    --sl: #ef5f5f; --tp: #3ece85; --order: #69a0f5; --band: rgba(90, 146, 239, 0.08); --band-setup: rgba(239, 174, 58, 0.09);
+    --chart-bg: #10171f; --grid: #1b2430; --warn-bg: #3a2c0b; --warn-fg: #f3d58f; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0d1218; --surface: #141b23; --surface-2: #1a232e; --line: #283442; --fg: #e3e9ef; --muted: #8e9fb1;
+  --accent: #5a92ef; --accent-fg: #0d1218; --bull: #2cc29a; --bear: #ef716b; --ema: #efae3a; --fvg: #a38af0;
+  --sl: #ef5f5f; --tp: #3ece85; --order: #69a0f5; --band: rgba(90, 146, 239, 0.08); --band-setup: rgba(239, 174, 58, 0.09);
+  --chart-bg: #10171f; --grid: #1b2430; --warn-bg: #3a2c0b; --warn-fg: #f3d58f; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font-family: var(--font-ui); font-size: 14px; line-height: 1.45; }
+.page { padding-inline: 16px; padding-block: 12px 32px; max-width: 1560px; margin: 0 auto; display: grid; gap: 12px; }
+h1 { font-size: 18px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
+h2 { font-size: 13px; margin: 0; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.topbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; }
+.topbar .title { display: grid; gap: 2px; min-width: 0; }
+.sub { color: var(--muted); font-size: 12px; }
+.badge { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); white-space: nowrap; }
+.badge.synthetic { background: var(--warn-bg); color: var(--warn-fg); border-color: transparent; font-weight: 600; }
+.spacer { flex: 1 1 auto; }
+.controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
+button, select, input { font: inherit; color: var(--fg); }
+button { background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px; padding: 6px 11px; cursor: pointer; white-space: nowrap; }
+button:hover { border-color: var(--accent); }
+button.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); font-weight: 600; min-width: 92px; }
+button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+select, input[type="date"], input[type="number"], input[type="text"] { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; }
+.ctl-group { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.ctl-group label { color: var(--muted); font-size: 12px; }
+.sep { width: 1px; align-self: stretch; background: var(--line); }
+.file-btn { position: relative; overflow: hidden; }
+.file-btn input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.main { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 12px; align-items: start; }
+@media (max-width: 980px) { .main { grid-template-columns: minmax(0, 1fr); } }
+.chart-card { background: var(--chart-bg); border: 1px solid var(--line); border-radius: 8px; position: relative; min-width: 0; }
+.chart-head { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; padding: 8px 10px; border-bottom: 1px solid var(--line); font-size: 12px; }
+.chart-head .clock { font-family: var(--font-data); font-variant-numeric: tabular-nums; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 12px; color: var(--muted); font-size: 11.5px; }
+.legend i { display: inline-block; width: 14px; height: 0; border-top: 2px solid; vertical-align: middle; margin-right: 4px; }
+.legend i.box { height: 9px; border: 1px solid; border-radius: 2px; }
+#chart { display: block; width: 100%; height: clamp(360px, 60vh, 640px); touch-action: none; cursor: crosshair; }
+#hover { position: absolute; left: 10px; top: 46px; font-family: var(--font-data); font-size: 11.5px; color: var(--muted); pointer-events: none; font-variant-numeric: tabular-nums; }
+.side { display: grid; gap: 12px; min-width: 0; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: grid; gap: 8px; min-width: 0; }
+.kv { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 12px; font-size: 13px; }
+.kv dt { color: var(--muted); }
+.kv dd { margin: 0; text-align: right; font-family: var(--font-data); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-family: var(--font-ui); font-weight: 600; }
+.pill.sell { background: color-mix(in srgb, var(--bear) 16%, transparent); color: var(--bear); }
+.pill.buy { background: color-mix(in srgb, var(--bull) 16%, transparent); color: var(--bull); }
+.pill.idle { background: var(--surface-2); color: var(--muted); }
+.pill.live { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
+.pos { color: var(--tp); }
+.neg { color: var(--sl); }
+.orders { display: grid; gap: 6px; font-family: var(--font-data); font-size: 12px; font-variant-numeric: tabular-nums; }
+.orders .row { display: flex; justify-content: space-between; gap: 8px; padding: 6px 8px; background: var(--surface-2); border-radius: 6px; flex-wrap: wrap; }
+.empty { color: var(--muted); font-size: 12.5px; }
+.tabs { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; min-width: 0; }
+.tablist { display: flex; gap: 2px; border-bottom: 1px solid var(--line); padding: 6px 6px 0; overflow-x: auto; }
+.tablist button { border: none; background: none; border-bottom: 2px solid transparent; border-radius: 0; padding: 8px 12px; color: var(--muted); font-weight: 600; }
+.tablist button[aria-selected="true"] { color: var(--fg); border-bottom-color: var(--accent); }
+.tabpanel { padding: 12px; min-width: 0; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { color: var(--muted); font-weight: 600; font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.04em; }
+td.num, th.num { text-align: right; font-family: var(--font-data); font-variant-numeric: tabular-nums; }
+tbody tr { cursor: pointer; }
+tbody tr:hover { background: var(--surface-2); }
+.stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 8px; }
+.stat { background: var(--surface-2); border-radius: 6px; padding: 8px 10px; display: grid; gap: 2px; }
+.stat span { color: var(--muted); font-size: 11.5px; }
+.stat b { font-family: var(--font-data); font-size: 16px; font-weight: 500; font-variant-numeric: tabular-nums; }
+#equity { width: 100%; height: 180px; display: block; margin-top: 12px; }
+.log { font-family: var(--font-data); font-size: 12px; display: grid; gap: 2px; max-height: 420px; overflow: auto; font-variant-numeric: tabular-nums; }
+.log div { padding: 3px 6px; border-radius: 4px; overflow-wrap: anywhere; }
+.log div.trade { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.log time { color: var(--muted); margin-right: 8px; }
+.params { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px 16px; }
+.params label { display: grid; gap: 3px; font-size: 12px; color: var(--muted); }
+.params input, .params select { color: var(--fg); width: 100%; }
+fieldset { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px 12px; margin: 0 0 12px; min-width: 0; }
+legend { font-size: 12px; font-weight: 700; padding: 0 6px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+.note { font-size: 12.5px; color: var(--muted); max-width: 75ch; }
+.note code { font-family: var(--font-data); font-size: 12px; }
+.disclaimer { font-size: 12px; color: var(--muted); }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="page">
+  <header class="topbar">
+    <div class="title">
+      <h1>Replay GG London</h1>
+      <span class="sub">Réplica de la lógica del EA GG_LondonSweepFVG v1.00 · sesgo EMA20 M15 · FVG M15 · L1 + L2 · SL −800 / TP +500</span>
+    </div>
+    <span class="spacer"></span>
+    <span id="dataBadge" class="badge synthetic">Datos sintéticos de demostración</span>
+  </header>
+
+  <section class="controls" aria-label="Controles de reproducción">
+    <div class="ctl-group">
+      <button id="btnPlay" class="primary" type="button">▶ Reproducir</button>
+      <button id="btnStep" type="button" title="Avanza una vela M1">+1 min</button>
+      <button id="btnEvent" type="button" title="Avanza hasta la siguiente orden, llenado o cierre">Siguiente evento</button>
+      <button id="btnDay" type="button" title="Avanza hasta el siguiente día de trading">Siguiente día</button>
+    </div>
+    <span class="sep"></span>
+    <div class="ctl-group">
+      <label for="speed">Velocidad</label>
+      <select id="speed">
+        <option value="1">1 min/s</option>
+        <option value="5">5 min/s</option>
+        <option value="15" selected>15 min/s</option>
+        <option value="30">30 min/s</option>
+        <option value="60">1 h/s</option>
+        <option value="240">4 h/s</option>
+      </select>
+      <label><input id="skipOff" type="checkbox" checked> saltar fuera de sesión</label>
+    </div>
+    <span class="sep"></span>
+    <div class="ctl-group">
+      <label for="tf">Gráfico</label>
+      <select id="tf"><option value="15" selected>M15</option><option value="5">M5</option><option value="1">M1</option></select>
+      <button id="btnFollow" type="button" title="Vuelve a seguir la vela actual">Seguir</button>
+    </div>
+    <span class="sep"></span>
+    <div class="ctl-group">
+      <label for="goDate">Ir a</label>
+      <input id="goDate" type="date">
+      <button id="btnGo" type="button">Ir</button>
+      <button id="btnRunAll" type="button" title="Ejecuta todo el histórico al instante">Ejecutar todo</button>
+      <button id="btnReset" type="button">Reiniciar</button>
+    </div>
+    <span class="sep"></span>
+    <div class="ctl-group">
+      <span class="file-btn"><button type="button" tabindex="-1">Cargar CSV de MT5</button><input id="csvFile" type="file" accept=".csv,.txt,text/csv,text/plain" aria-label="Cargar CSV de MT5"></span>
+      <button id="btnDemo" type="button">Datos de demo</button>
+    </div>
+  </section>
+
+  <section class="main">
+    <div class="chart-card">
+      <div class="chart-head">
+        <span class="clock" id="clock">—</span>
+        <span id="windowPill" class="pill idle">Fuera de sesión</span>
+        <span class="spacer"></span>
+        <div class="legend" aria-hidden="true">
+          <span><i style="border-color:var(--ema)"></i>EMA20 M15</span>
+          <span><i class="box" style="border-color:var(--fvg)"></i>FVG válido</span>
+          <span><i style="border-color:var(--muted);border-top-style:dashed"></i>Swing</span>
+          <span><i style="border-color:var(--order);border-top-style:dashed"></i>L1 / L2</span>
+          <span><i style="border-color:var(--sl)"></i>SL</span>
+          <span><i style="border-color:var(--tp)"></i>TP</span>
+        </div>
+      </div>
+      <canvas id="chart" aria-label="Gráfico de velas con las órdenes del EA"></canvas>
+      <div id="hover"></div>
+    </div>
+
+    <aside class="side">
+      <div class="card">
+        <h2>Estado del EA</h2>
+        <dl class="kv">
+          <dt>Sesgo</dt><dd id="stBias">—</dd>
+          <dt>Cierre / EMA20</dt><dd id="stEma">—</dd>
+          <dt>Swing</dt><dd id="stSwing">—</dd>
+          <dt>FVG válidos</dt><dd id="stZones">—</dd>
+          <dt>Setup del día</dt><dd id="stDay">—</dd>
+        </dl>
+      </div>
+      <div class="card">
+        <h2>Órdenes y posiciones</h2>
+        <div id="ordersBox" class="orders"></div>
+        <dl class="kv">
+          <dt>P&amp;L flotante</dt><dd id="stFloat">0,00</dd>
+          <dt>Resultado del día</dt><dd id="stDayPnl">0,00</dd>
+          <dt>Balance</dt><dd id="stBalance">—</dd>
+        </dl>
+      </div>
+      <div class="card">
+        <h2>Último mensaje</h2>
+        <div id="lastLog" class="empty">—</div>
+      </div>
+    </aside>
+  </section>
+
+  <section class="tabs">
+    <div class="tablist" role="tablist">
+      <button role="tab" id="tab-trades" aria-selected="true" aria-controls="panel-trades" type="button">Operaciones</button>
+      <button role="tab" id="tab-stats" aria-selected="false" aria-controls="panel-stats" type="button">Estadísticas</button>
+      <button role="tab" id="tab-log" aria-selected="false" aria-controls="panel-log" type="button">Diario</button>
+      <button role="tab" id="tab-params" aria-selected="false" aria-controls="panel-params" type="button">Parámetros y datos</button>
+    </div>
+    <div class="tabpanel" id="panel-trades" role="tabpanel">
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Día</th><th>Dir.</th><th class="num">L1</th><th class="num">L2</th><th class="num">SL</th><th class="num">Lotes</th><th>Llenadas</th><th>Salida</th><th class="num">Resultado</th></tr></thead>
+          <tbody id="tradesBody"></tbody>
+        </table>
+      </div>
+      <p class="note">Haz clic en una fila para centrar el gráfico en ese día.</p>
+    </div>
+    <div class="tabpanel" id="panel-stats" role="tabpanel" hidden>
+      <div class="stats" id="statsBox"></div>
+      <canvas id="equity" aria-label="Curva de balance"></canvas>
+      <p class="note" id="statsNote"></p>
+    </div>
+    <div class="tabpanel" id="panel-log" role="tabpanel" hidden>
+      <div class="log" id="logBox"></div>
+    </div>
+    <div class="tabpanel" id="panel-params" role="tabpanel" hidden>
+      <form id="paramsForm">
+        <fieldset>
+          <legend>Riesgo</legend>
+          <div class="params">
+            <label>Pérdida máxima total (USD)<input id="p_riskMoney" type="number" step="1" min="1"></label>
+            <label>Beneficio objetivo total (USD)<input id="p_tpMoney" type="number" step="1" min="1"></label>
+            <label>Distancia SL desde precio medio<input id="p_slDist" type="number" step="0.1" min="0.1"></label>
+            <label>Comisión por lote y lado (USD)<input id="p_commission" type="number" step="0.01" min="0"></label>
+            <label>Balance inicial (USD)<input id="p_balance" type="number" step="100" min="0"></label>
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend>Señal</legend>
+          <div class="params">
+            <label>Periodo EMA (M15)<input id="p_emaPeriod" type="number" step="1" min="1"></label>
+            <label>Velas a cada lado del swing (K)<input id="p_pivotK" type="number" step="1" min="1"></label>
+            <label>Velas M15 para buscar el swing<input id="p_lookback" type="number" step="1" min="10"></label>
+            <label>Antigüedad máxima FVG (h)<input id="p_fvgAgeH" type="number" step="1" min="1"></label>
+            <label>Margen de L2 más allá del FVG<input id="p_l2Buffer" type="number" step="0.1" min="0"></label>
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend>Horario</legend>
+          <div class="params">
+            <label>Inicio ventana (Madrid, HH:MM)<input id="p_start" type="text" pattern="\d{1,2}:\d{2}"></label>
+            <label>Fin de creación de setups (Madrid)<input id="p_setupEnd" type="text" pattern="\d{1,2}:\d{2}"></label>
+            <label>Llegada de NY (hora NY)<input id="p_nyCut" type="text" pattern="\d{1,2}:\d{2}"></label>
+            <label>Offset GMT servidor en invierno<input id="p_srvWinter" type="number" step="1" min="-12" max="14"></label>
+            <label>Horario de verano del servidor<select id="p_srvDst"><option value="US">EE. UU.</option><option value="EU">Europeo</option><option value="NONE">Ninguno</option></select></label>
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend>Símbolo (copia los valores del log de inicio del EA)</legend>
+          <div class="params">
+            <label>Valor de 1.0 de precio por lote (USD)<input id="p_vpp" type="number" step="0.01" min="0.0001"></label>
+            <label>Tamaño de tick<input id="p_tick" type="number" step="0.001" min="0.00001"></label>
+            <label>Tamaño de punto (para la columna SPREAD)<input id="p_pointSize" type="number" step="0.001" min="0.00001"></label>
+            <label>Lote mínimo<input id="p_volMin" type="number" step="0.01" min="0.01"></label>
+            <label>Paso de lote<input id="p_volStep" type="number" step="0.01" min="0.01"></label>
+            <label>Lote máximo<input id="p_volMax" type="number" step="1" min="0.01"></label>
+            <label>Stops level (en precio)<input id="p_stopsLevel" type="number" step="0.1" min="0"></label>
+            <label>Spread fijo si el CSV no lo trae (precio)<input id="p_fixedSpread" type="number" step="0.1" min="0"></label>
+            <label>Spread máximo para colocar (0 = off)<input id="p_maxSpread" type="number" step="0.1" min="0"></label>
+          </div>
+        </fieldset>
+        <button class="primary" type="submit">Aplicar y reiniciar</button>
+        <span class="note" id="paramsMsg"></span>
+      </form>
+      <h2 style="margin-top:18px">Cómo cargar tus datos reales</h2>
+      <ol class="note">
+        <li>En MT5 (VT Markets): <b>Ver → Símbolos</b> (Ctrl+U), pestaña <b>Barras</b>.</li>
+        <li>Elige el CFD del Nasdaq (p. ej. <code>NAS100</code>), periodo <b>M1</b>, el rango de fechas y pulsa <b>Solicitar</b>.</li>
+        <li>Pulsa <b>Exportar barras</b> y guarda el CSV.</li>
+        <li>Aquí, pulsa <b>Cargar CSV de MT5</b>. Las horas del archivo son hora del servidor; ajusta el offset en "Horario" si hace falta.</li>
+      </ol>
+      <p class="note">Los primeros ~15 h de datos sirven de calentamiento de la EMA; el simulador no opera hasta tener al menos 60 velas M15.</p>
+    </div>
+  </section>
+
+  <p class="disclaimer">Este simulador es una réplica en JavaScript de las reglas del EA, con ejecución tipo "1 minuto OHLC": cada vela M1 se recorre como apertura → mínimo/máximo → cierre, las limits de venta se llenan con el Bid y los stops de venta con el Ask (Bid + spread). Sirve para ver y revisar el comportamiento; no sustituye al Strategy Tester de MT5 con el EA real y ticks reales. Los datos de demostración son aleatorios y no representan el mercado: sus resultados no significan nada.</p>
+</div>
+
+<script>
+(() => {
+"use strict";
+
+// ------------------------------------------------------------------ parámetros (= inputs del EA)
+const DEFAULTS = {
+  riskMoney: 800, tpMoney: 500, slDist: 66.7, commission: 0, balance: 50000,
+  emaPeriod: 20, pivotK: 3, lookback: 200, fvgAgeH: 3, l2Buffer: 0,
+  start: "9:00", setupEnd: "11:00", nyCut: "9:30", srvWinter: 2, srvDst: "US",
+  vpp: 1, tick: 0.01, pointSize: 0.01, volMin: 0.01, volStep: 0.01, volMax: 100,
+  stopsLevel: 0, fixedSpread: 1.0, maxSpread: 0
+};
+let P = { ...DEFAULTS };
+
+// ------------------------------------------------------------------ tiempo (port de ComputeSession)
+const H = 3600;
+const mk = (y, m, d, h = 0, mi = 0) => Date.UTC(y, m - 1, d, h, mi) / 1000;
+const parts = t => { const D = new Date(t * 1000); return { y: D.getUTCFullYear(), m: D.getUTCMonth() + 1, d: D.getUTCDate(), dow: D.getUTCDay(), h: D.getUTCHours(), mi: D.getUTCMinutes() }; };
+const nthSunday = (y, m, n) => { const f = mk(y, m, 1); const off = (7 - parts(f).dow) % 7; return f + (off + 7 * (n - 1)) * 86400; };
+const lastSunday = (y, m) => { let ny = y, nm = m + 1; if (nm > 12) { nm = 1; ny++; } const f = mk(ny, nm, 1); const dow = parts(f).dow; return f - (dow === 0 ? 7 : dow) * 86400; };
+const usDst = u => { const y = parts(u).y; return u >= nthSunday(y, 3, 2) + 7 * H && u < nthSunday(y, 11, 1) + 6 * H; };
+const euDst = u => { const y = parts(u).y; return u >= lastSunday(y, 3) + H && u < lastSunday(y, 10) + H; };
+const srvOffFromUtc = u => P.srvWinter * H + ((P.srvDst === "US" ? usDst(u) : P.srvDst === "EU" ? euDst(u) : false) ? H : 0);
+const srvToUtc = s => s - srvOffFromUtc(s - P.srvWinter * H);
+const utcToSrv = u => u + srvOffFromUtc(u);
+const madOff = u => H + (euDst(u) ? H : 0);
+const nyOff = u => -5 * H + (usDst(u) ? H : 0);
+const hm = str => { const [a, b] = String(str).split(":").map(Number); return [a || 0, b || 0]; };
+
+function computeSession(srv) {
+  const utc = srvToUtc(srv);
+  const md = parts(utc + madOff(utc));
+  const noon = mk(md.y, md.m, md.d, 12, 0);
+  const mo = madOff(noon), no = nyOff(noon + 5 * H);
+  const [sh, sm] = hm(P.start), [eh, em] = hm(P.setupEnd), [ch, cm] = hm(P.nyCut);
+  const start = mk(md.y, md.m, md.d, sh, sm) - mo;
+  let setupEnd = mk(md.y, md.m, md.d, eh, em) - mo;
+  const cutoff = mk(md.y, md.m, md.d, ch, cm) - no;
+  if (setupEnd > cutoff) setupEnd = cutoff;
+  return { key: md.y * 10000 + md.m * 100 + md.d, trading: md.dow >= 1 && md.dow <= 5,
+           start: utcToSrv(start), setupEnd: utcToSrv(setupEnd), cutoff: utcToSrv(cutoff) };
+}
+const madridOf = srv => { const u = srvToUtc(srv); return u + madOff(u); };
+const nyOf = srv => { const u = srvToUtc(srv); return u + nyOff(u); };
+const pad = n => String(n).padStart(2, "0");
+const fmtHM = t => { const p = parts(t); return `${pad(p.h)}:${pad(p.mi)}`; };
+const fmtDate = t => { const p = parts(t); return `${pad(p.d)}/${pad(p.m)}/${p.y}`; };
+const fmtKey = k => `${pad(k % 100)}/${pad(Math.floor(k / 100) % 100)}/${Math.floor(k / 10000)}`;
+const DOW = ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"];
+const nf2 = new Intl.NumberFormat("es-ES", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const money = v => (v > 0 ? "+" : "") + nf2.format(v);
+let priceDigits = 2;
+const px = v => (v == null || !isFinite(v)) ? "—" : v.toFixed(priceDigits);
+
+// ------------------------------------------------------------------ redondeos (port de RoundToTick/FloorToTick/CeilToTick)
+const decimalsOf = step => { let d = 0; while (d < 8 && Math.abs(step * 10 ** d - Math.round(step * 10 ** d)) > 1e-8) d++; return d; };
+const roundTick = p => +(Math.round(p / P.tick) * P.tick).toFixed(decimalsOf(P.tick));
+const floorTick = p => +(Math.floor(p / P.tick + 1e-9) * P.tick).toFixed(decimalsOf(P.tick));
+const ceilTick = p => +(Math.ceil(p / P.tick - 1e-9) * P.tick).toFixed(decimalsOf(P.tick));
+function normalizeVolumeDown(raw) {
+  if (P.volStep <= 0 || raw <= 0) return 0;
+  let cap = Math.min(raw, P.volMax);
+  let v = Math.floor(cap / P.volStep + 1e-9) * P.volStep;
+  v = +v.toFixed(decimalsOf(P.volStep));
+  return v < P.volMin - 1e-12 ? 0 : v;
+}
+
+// ------------------------------------------------------------------ motor (réplica de OnTick + servidor)
+class Engine {
+  constructor(bars, barSec) { this.bars = bars; this.barSec = barSec; this.reset(); }
+
+  reset() {
+    this.i = 0;
+    this.tf = { 1: { arr: [], form: null }, 5: { arr: [], form: null }, 15: { arr: [], form: null } };
+    this.ema = [];                 // EMA alineada con tf[15].arr (velas cerradas)
+    this.orders = []; this.positions = [];
+    this.balance = P.balance; this.nextId = 1;
+    this.dayKey = 0; this.day = null; this.days = [];
+    this.setups = []; this.events = []; this.logs = [];
+    this.signal = { ready: false, bias: 0 }; this.zones = [];
+    this.lastOnce = ""; this.streak = 0; this.tradeEvents = 0;
+    this.now = this.bars.length ? this.bars[0].t : 0; this.bid = 0; this.ask = 0;
+    this.sessCache = new Map(); this.sess = null;
+    this.equity = [{ t: this.now, v: this.balance }];
+  }
+
+  session(t) {
+    const k = Math.floor(t / H);
+    let s = this.sessCache.get(k);
+    if (!s) { s = computeSession(t); if (this.sessCache.size > 5000) this.sessCache.clear(); this.sessCache.set(k, s); }
+    return s;
+  }
+
+  log(msg, trade = false) { this.logs.push({ t: this.now, msg, trade }); if (trade) this.tradeEvents++; }
+  logOnce(msg) { const key = Math.floor(this.now / 900) + "|" + msg; if (key === this.lastOnce) return; this.lastOnce = key; this.log(msg); }
+
+  // --- velas
+  addToTf(tfMin, b, px, isFirst) {
+    const sec = tfMin * 60, bucket = Math.floor(b.t / sec) * sec, T = this.tf[tfMin];
+    let isNew = false;
+    if (!T.form || T.form.t !== bucket) {
+      if (T.form) { T.arr.push(T.form); if (tfMin === 15) this.pushEma(T.form.c); }
+      T.form = { t: bucket, o: px, h: px, l: px, c: px }; isNew = true;
+    } else if (!isFirst || true) {
+      T.form.h = Math.max(T.form.h, px); T.form.l = Math.min(T.form.l, px); T.form.c = px;
+    }
+    return isNew;
+  }
+  pushEma(close) {
+    const a = 2 / (P.emaPeriod + 1), n = this.ema.length;
+    this.ema.push(n === 0 ? close : a * close + (1 - a) * this.ema[n - 1]);
+  }
+
+  step() {
+    if (this.i >= this.bars.length) return false;
+    const b = this.bars[this.i];
+    const sp = b.sp > 0 ? b.sp * P.pointSize : P.fixedSpread;
+    const path = b.c >= b.o ? [b.o, b.l, b.h, b.c] : [b.o, b.h, b.l, b.c];
+    const frac = [0, 0.25, 0.5, 0.98];
+    for (let k = 0; k < 4; k++) {
+      const price = path[k];
+      let newM15 = false;
+      for (const tfm of [1, 5, 15]) { const isNew = this.addToTf(tfm, b, price, k === 0); if (tfm === 15 && isNew) newM15 = true; }
+      this.tick(b.t + Math.floor(frac[k] * this.barSec), price, price + sp, newM15, k);
+    }
+    this.i++;
+    return this.i < this.bars.length;
+  }
+
+  tick(t, bid, ask, newM15, k) {
+    this.now = t; this.bid = bid; this.ask = ask;
+    this.serverTick(k);
+    this.eaTick(newM15);
+  }
+
+  // --- servidor: llenado de limits, SL/TP, expiración
+  serverTick(k) {
+    for (const o of [...this.orders]) {
+      if (o.exp && this.now >= o.exp) { this.removeOrder(o, "expirada en el servidor"); continue; }
+      if (o.dir < 0 && this.bid >= o.price) this.fill(o, (k === 0 && this.bid > o.price) ? this.bid : o.price);
+      else if (o.dir > 0 && this.ask <= o.price) this.fill(o, (k === 0 && this.ask < o.price) ? this.ask : o.price);
+    }
+    for (const p of [...this.positions]) {
+      if (p.dir < 0) {
+        if (this.ask >= p.sl) this.closePos(p, (k === 0 && this.ask > p.sl) ? this.ask : p.sl, "SL");
+        else if (this.ask <= p.tp) this.closePos(p, (k === 0 && this.ask < p.tp) ? this.ask : p.tp, "TP");
+      } else {
+        if (this.bid <= p.sl) this.closePos(p, (k === 0 && this.bid < p.sl) ? this.bid : p.sl, "SL");
+        else if (this.bid >= p.tp) this.closePos(p, (k === 0 && this.bid > p.tp) ? this.bid : p.tp, "TP");
+      }
+    }
+  }
+
+  fill(o, price) {
+    this.orders = this.orders.filter(x => x !== o);
+    const p = { id: o.id, tag: o.tag, dir: o.dir, vol: o.vol, price, sl: o.sl, tp: o.tp, open: this.now };
+    this.positions.push(p);
+    this.balance -= P.commission * o.vol;
+    this.day.fills.push(o.tag);
+    this.events.push({ t: this.now, price, kind: "fill", dir: o.dir, tag: o.tag });
+    this.log(`${o.tag} llenada: ${o.dir < 0 ? "venta" : "compra"} ${o.vol.toFixed(2)} lotes a ${px(price)} (posición #${p.id})`, true);
+  }
+
+  closePos(p, price, reason) {
+    this.positions = this.positions.filter(x => x !== p);
+    const gross = p.dir * (price - p.price) * P.vpp * p.vol;
+    this.balance += gross - P.commission * p.vol;
+    const net = gross - 2 * P.commission * p.vol;
+    this.day.net += net;
+    this.day.exits.push(reason);
+    this.day.exit = true;
+    this.events.push({ t: this.now, price, kind: "exit", dir: p.dir, net, reason });
+    this.equity.push({ t: this.now, v: this.balance });
+    const label = reason === "SL" ? "SL tocado" : reason === "TP" ? "TP tocado" : "cerrada por el EA";
+    this.log(`Posición #${p.id} (${p.tag}) ${label} a ${px(price)} · ${money(net)}`, true);
+    this.endSetupDrawing();
+  }
+
+  removeOrder(o, why) {
+    this.orders = this.orders.filter(x => x !== o);
+    this.log(`Orden pendiente #${o.id} (${o.tag}) ${why}`, true);
+    if (!this.orders.length && !this.positions.length) this.endSetupDrawing();
+  }
+
+  endSetupDrawing() {
+    const s = this.setups[this.setups.length - 1];
+    if (s && s.end == null && !this.orders.length && !this.positions.length) s.end = this.now;
+  }
+
+  flatten(reason) {
+    this.log("Cerrar todo: " + reason, true);
+    for (const o of [...this.orders]) this.removeOrder(o, "cancelada");
+    for (const p of [...this.positions]) this.closePos(p, p.dir < 0 ? this.ask : this.bid, "EA");
+    this.endSetupDrawing();
+  }
+
+  // --- EA: flujo de OnTick
+  eaTick(newM15) {
+    const s = this.session(this.now);
+    this.sess = s;
+    if (s.key !== this.dayKey) this.newDay(s);
+    const nO = this.orders.length, nP = this.positions.length;
+    const inWin = s.trading && this.now >= s.start && this.now < s.cutoff;
+
+    if (!inWin) {
+      if (nO + nP > 0) this.flatten("fin de sesión: llegada de NY o fuera de la ventana de Londres");
+      else this.dailySummary(s);
+      return;
+    }
+    if (this.orders.some(o => o.placed < s.start) || this.positions.some(p => p.open < s.start)) {
+      this.flatten("órdenes o posiciones de un día anterior"); return;
+    }
+    if (this.day.exit) { if (nO + nP > 0) this.flatten("salida del setup de hoy: cerrar todo y cancelar pendientes"); return; }
+    if (nP > 0) { this.manage(nO); return; }
+    if (nO > 0 || this.day.placed || this.day.blocked || this.now >= s.setupEnd) return;
+    if (newM15 || !this.signal.ready) this.computeSignal();
+    this.tryPlace(s);
+  }
+
+  newDay(s) {
+    this.dayKey = s.key;
+    this.day = { key: s.key, trading: s.trading, start: s.start, cutoff: s.cutoff, setupEnd: s.setupEnd,
+                 placed: false, exit: false, blocked: false, plan: null, fills: [], exits: [], net: 0, summary: false };
+    this.days.push(this.day);
+    this.signal = { ready: false, bias: 0 }; this.zones = [];
+  }
+
+  dailySummary(s) {
+    if (!s.trading || this.now < s.cutoff || this.day.summary) return;
+    this.day.summary = true;
+    if (!this.day.placed) { this.log(`Resumen ${fmtKey(s.key)}: sin setup`); return; }
+    if (!this.day.fills.length) { this.log(`Resumen ${fmtKey(s.key)}: setup colocado sin llenado | racha de días en pérdida: ${this.streak}`); return; }
+    if (this.day.net < 0) this.streak++; else if (this.day.net > 0) this.streak = 0;
+    this.log(`Resumen ${fmtKey(s.key)}: resultado neto ${money(this.day.net)} | racha de días en pérdida: ${this.streak}`);
+  }
+
+  manage(nO) {
+    const plan = this.day.plan;
+    if (!plan) { this.logOnce("AVISO: posición abierta sin datos del setup de hoy"); return; }
+    const desired = nO > 0 ? plan.tp1 : plan.tp2, half = P.tick / 2, minDist = P.stopsLevel;
+    for (const p of [...this.positions]) {
+      if (Math.abs(p.sl - plan.sl) <= half && Math.abs(p.tp - desired) <= half) continue;
+      if (p.dir < 0) {
+        if (this.ask <= desired) { this.flatten("TP ya alcanzado antes de poder modificarlo"); return; }
+        if (this.ask >= plan.sl) { this.flatten("SL ya alcanzado antes de poder modificarlo"); return; }
+        if (this.ask - desired < minDist || plan.sl - this.ask < minDist) continue;
+      } else {
+        if (this.bid >= desired) { this.flatten("TP ya alcanzado antes de poder modificarlo"); return; }
+        if (this.bid <= plan.sl) { this.flatten("SL ya alcanzado antes de poder modificarlo"); return; }
+        if (desired - this.bid < minDist || this.bid - plan.sl < minDist) continue;
+      }
+      p.sl = plan.sl; p.tp = desired;
+      this.log(`Posición #${p.id}: SL ${px(plan.sl)}, TP ${px(desired)} (${nO > 0 ? "solo L1" : "L1 + L2, TP combinado"})`, true);
+    }
+  }
+
+  // --- señal (port de ComputeSignal)
+  computeSignal() {
+    this.signal = { ready: false, bias: 0 }; this.zones = [];
+    const all = this.tf[15].arr, K = P.pivotK;
+    if (all.length < Math.max(60, P.emaPeriod * 3) || this.ema.length !== all.length) { this.logOnce("Calentando la EMA M15 (datos insuficientes); se reintentará"); return; }
+    const n = Math.min(P.lookback, all.length);
+    if (n < 2 * K + 3) { this.logOnce(`Datos M15 insuficientes (${n} velas)`); return; }
+    const r = []; for (let j = 0; j < n; j++) r.push(all[all.length - 1 - j]);   // r[0] = última vela cerrada
+    const ema = this.ema[this.ema.length - 1], close = r[0].c;
+    const bias = close > ema ? 1 : close < ema ? -1 : 0;
+    this.signal = { ready: true, bias, close, ema };
+    if (bias === 0) { this.log(`Sesgo: ninguno (cierre M15 ${px(close)} = EMA${P.emaPeriod} ${px(ema)})`); return; }
+    let level = null, when = 0;
+    for (let i = K; i < n - K && level == null; i++) {
+      let pivot = true;
+      for (let j = 1; j <= K && pivot; j++) {
+        if (bias < 0) { if (!(r[i].h > r[i - j].h && r[i].h > r[i + j].h)) pivot = false; }
+        else { if (!(r[i].l < r[i - j].l && r[i].l < r[i + j].l)) pivot = false; }
+      }
+      if (pivot) { level = bias < 0 ? r[i].h : r[i].l; when = r[i].t; }
+    }
+    if (level == null) { this.log(`Sesgo ${bias < 0 ? "BAJISTA" : "ALCISTA"}: no hay swing confirmado en ${n} velas M15 → no hay setup`); this.signal.bias = 0; return; }
+    this.signal.swing = level; this.signal.swingTime = when;
+    const maxAge = P.fvgAgeH * H;
+    for (let i = 0; i + 2 < n; i++) {
+      const formed = r[i].t + 900;
+      if (this.now - formed > maxAge) break;
+      let lo = null, hi = null;
+      if (r[i + 2].l > r[i].h) { lo = r[i].h; hi = r[i + 2].l; }          // FVG bajista
+      else if (r[i + 2].h < r[i].l) { lo = r[i + 2].h; hi = r[i].l; }     // FVG alcista
+      if (lo == null) continue;
+      if (bias < 0 ? lo > level : hi < level) this.zones.push({ low: lo, high: hi, formed, start: r[i + 2].t });
+    }
+    this.log(`Sesgo ${bias < 0 ? "BAJISTA" : "ALCISTA"} (cierre ${px(close)} vs EMA${P.emaPeriod} ${px(ema)}) | swing ${bias < 0 ? "high" : "low"} ${px(level)} @ ${fmtHM(when)} | FVG válidos: ${this.zones.length}`);
+  }
+
+  // --- selección y plan (port de TryPlaceSetup/BuildPlan)
+  tryPlace(s) {
+    const sig = this.signal;
+    if (!sig.ready || sig.bias === 0 || !this.zones.length) return;
+    if (P.maxSpread > 0 && this.ask - this.bid > P.maxSpread) { this.logOnce(`Spread ${px(this.ask - this.bid)} > máximo ${px(P.maxSpread)}: setup en espera`); return; }
+    const minDist = P.stopsLevel, maxAge = P.fvgAgeH * H;
+    let best = null, bestL1 = 0;
+    for (const z of this.zones) {
+      if (this.now - z.formed > maxAge) continue;
+      if (sig.bias < 0) { const l1 = roundTick(z.low); if (l1 <= this.bid || l1 - this.bid < minDist) continue; if (!best || l1 < bestL1) { best = z; bestL1 = l1; } }
+      else { const l1 = roundTick(z.high); if (l1 >= this.ask || this.ask - l1 < minDist) continue; if (!best || l1 > bestL1) { best = z; bestL1 = l1; } }
+    }
+    if (!best) { this.logOnce("Ningún FVG válido queda al otro lado del precio actual: sin setup por ahora"); return; }
+    const res = this.buildPlan(sig.bias, best, minDist);
+    if (res.error) { this.logOnce("Setup descartado: " + res.error); return; }
+    this.place(s, res, best);
+  }
+
+  buildPlan(dir, z, minDist) {
+    const p = { dir };
+    let avg;
+    if (dir < 0) {
+      p.l1 = roundTick(z.low); p.l2 = roundTick(z.high + P.l2Buffer); avg = (p.l1 + p.l2) / 2; p.sl = floorTick(avg + P.slDist);
+      if (p.l2 <= p.l1) return { error: "L2 no queda por encima de L1" };
+      if (p.sl - p.l2 < minDist || p.sl <= p.l2) return { error: `FVG demasiado ancho: el SL (${px(p.sl)}) no queda por encima de L2 (${px(p.l2)})` };
+    } else {
+      p.l1 = roundTick(z.high); p.l2 = roundTick(z.low - P.l2Buffer); avg = (p.l1 + p.l2) / 2; p.sl = ceilTick(avg - P.slDist);
+      if (p.l2 >= p.l1) return { error: "L2 no queda por debajo de L1" };
+      if (p.l2 - p.sl < minDist || p.sl >= p.l2) return { error: `FVG demasiado ancho: el SL (${px(p.sl)}) no queda por debajo de L2 (${px(p.l2)})` };
+    }
+    const lossPair = dir < 0 ? ((p.sl - p.l1) + (p.sl - p.l2)) * P.vpp : ((p.l1 - p.sl) + (p.l2 - p.sl)) * P.vpp;
+    const commPair = 4 * P.commission;
+    p.vol = normalizeVolumeDown(P.riskMoney / (lossPair + commPair));
+    if (p.vol <= 0) return { error: `volumen por debajo del mínimo del bróker (${P.volMin} lotes) para un riesgo de ${P.riskMoney}` };
+    p.risk = p.vol * (lossPair + commPair);
+    const d1 = P.tpMoney / (p.vol * P.vpp), d2 = P.tpMoney / (2 * p.vol * P.vpp);
+    if (dir < 0) {
+      p.tp1 = floorTick(p.l1 - d1); p.tp2 = floorTick(avg - d2);
+      if (p.l1 - p.tp1 < minDist || p.l2 - p.tp2 < minDist) return { error: "TP demasiado cerca de las entradas para el stops level" };
+      if (p.l1 - this.bid < minDist || p.l1 <= this.bid) return { error: "L1 no queda por encima del Bid" };
+    } else {
+      p.tp1 = ceilTick(p.l1 + d1); p.tp2 = ceilTick(avg + d2);
+      if (p.tp1 - p.l1 < minDist || p.tp2 - p.l2 < minDist) return { error: "TP demasiado cerca de las entradas para el stops level" };
+      if (this.ask - p.l1 < minDist || p.l1 >= this.ask) return { error: "L1 no queda por debajo del Ask" };
+    }
+    p.avg = avg;
+    return p;
+  }
+
+  place(s, plan, zone) {
+    const exp = s.cutoff > this.now + 120 ? s.cutoff : 0;
+    this.log(`SETUP ${plan.dir < 0 ? "VENTA" : "COMPRA"} | FVG [${px(zone.low)} - ${px(zone.high)}] | L1 ${px(plan.l1)}, L2 ${px(plan.l2)}, ${plan.vol.toFixed(2)} lotes cada una | SL ${px(plan.sl)} | TP1 ${px(plan.tp1)} | TP2 ${px(plan.tp2)} | riesgo estimado ${nf2.format(plan.risk)}`, true);
+    for (const [tag, price, tp] of [["L1", plan.l1, plan.tp1], ["L2", plan.l2, plan.tp2]]) {
+      const o = { id: this.nextId++, tag, dir: plan.dir, vol: plan.vol, price, sl: plan.sl, tp, exp, placed: this.now };
+      this.orders.push(o);
+      this.log(`${tag} colocada: orden #${o.id} ${plan.dir < 0 ? "sell limit" : "buy limit"} a ${px(price)}`, true);
+    }
+    this.day.placed = true; this.day.plan = plan;
+    this.setups.push({ day: this.day.key, place: this.now, end: null, plan, zone, swing: this.signal.swing, swingTime: this.signal.swingTime });
+    this.events.push({ t: this.now, price: plan.l1, kind: "place", dir: plan.dir });
+  }
+
+  floating() {
+    let f = 0;
+    for (const p of this.positions) f += p.dir * ((p.dir < 0 ? this.ask : this.bid) - p.price) * P.vpp * p.vol;
+    return f;
+  }
+}
+
+// ------------------------------------------------------------------ datos
+function mulberry32(a) { return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+
+function makeSyntheticBars() {
+  const rnd = mulberry32(20261010);
+  const gauss = () => { let u = 0, v = 0; while (!u) u = rnd(); while (!v) v = rnd(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); };
+  const bars = [];
+  let price = 21500, drift = 0;
+  let day = mk(2026, 6, 1);
+  let tradingDays = 0;
+  while (tradingDays < 30) {
+    const dow = parts(day).dow;
+    if (dow >= 1 && dow <= 5) {
+      tradingDays++;
+      for (let m = 60; m < 24 * 60 - 5; m++) {         // 01:00–23:55 hora servidor
+        const t = day + m * 60, hour = m / 60;
+        if (m % 180 === 0) drift = (rnd() - 0.5) * 0.9;  // régimen de tendencia cada 3 h
+        const vol = hour >= 10 && hour < 13 ? 3.4 : hour >= 16 && hour < 19 ? 5.2 : 2.0;
+        const shock = rnd() < 0.004 ? gauss() * 25 : 0;  // impulsos ocasionales (crean FVG)
+        const o = price;
+        const c = o + drift + gauss() * vol + shock;
+        const h = Math.max(o, c) + Math.abs(gauss()) * vol * 0.6;
+        const l = Math.min(o, c) - Math.abs(gauss()) * vol * 0.6;
+        bars.push({ t, o: +o.toFixed(2), h: +h.toFixed(2), l: +l.toFixed(2), c: +c.toFixed(2), sp: 100 });
+        price = c;
+      }
+    }
+    day += 86400;
+  }
+  return bars;
+}
+
+function parseCsv(text) {
+  const lines = text.split(/\r?\n/).filter(l => l.trim());
+  if (!lines.length) throw new Error("El archivo está vacío.");
+  const delim = lines[0].includes("\t") ? "\t" : (lines[0].split(";").length > lines[0].split(",").length ? ";" : ",");
+  let idx = { date: 0, time: 1, open: 2, high: 3, low: 4, close: 5, spread: 8 }, start = 0;
+  const head = lines[0].split(delim).map(s => s.replace(/[<>"]/g, "").trim().toUpperCase());
+  if (head.some(h => /[A-Z]{3,}/.test(h))) {
+    start = 1;
+    const f = name => head.findIndex(h => h === name);
+    idx = { date: f("DATE"), time: f("TIME"), open: f("OPEN"), high: f("HIGH"), low: f("LOW"), close: f("CLOSE"), spread: f("SPREAD") };
+    if (idx.date < 0 || idx.open < 0) throw new Error("No encuentro las columnas DATE/OPEN. Exporta las barras desde Ver → Símbolos → Barras.");
+  }
+  const bars = [];
+  for (let n = start; n < lines.length; n++) {
+    const c = lines[n].split(delim).map(s => s.trim());
+    let dstr = c[idx.date], tstr = idx.time >= 0 ? c[idx.time] : "";
+    if (dstr && dstr.includes(" ") && (!tstr || !/^\d{1,2}:\d{2}/.test(tstr))) { [dstr, tstr] = dstr.split(/\s+/); }
+    const dm = /^(\d{4})[.\-/](\d{1,2})[.\-/](\d{1,2})$/.exec(dstr || "");
+    const tm = /^(\d{1,2}):(\d{2})(?::(\d{2}))?/.exec(tstr || "00:00");
+    if (!dm || !tm) continue;
+    const t = mk(+dm[1], +dm[2], +dm[3], +tm[1], +tm[2]) + (+tm[3] || 0);
+    const o = parseFloat(c[idx.open]), h = parseFloat(c[idx.high]), l = parseFloat(c[idx.low]), cl = parseFloat(c[idx.close]);
+    if (![o, h, l, cl].every(isFinite)) continue;
+    const sp = idx.spread >= 0 && c[idx.spread] != null ? parseFloat(c[idx.spread]) || 0 : 0;
+    bars.push({ t, o, h, l, c: cl, sp });
+  }
+  if (bars.length < 100) throw new Error("He leído menos de 100 barras válidas. Revisa el formato del archivo.");
+  bars.sort((a, b) => a.t - b.t);
+  const out = [bars[0]];
+  for (let k = 1; k < bars.length; k++) if (bars[k].t !== out[out.length - 1].t) out.push(bars[k]);
+  return out;
+}
+
+function detectBarSec(bars) {
+  const counts = new Map();
+  for (let k = 1; k < Math.min(bars.length, 5000); k++) { const d = bars[k].t - bars[k - 1].t; if (d > 0) counts.set(d, (counts.get(d) || 0) + 1); }
+  let best = 60, bc = 0; for (const [d, c] of counts) if (c > bc) { best = d; bc = c; }
+  return best;
+}
+
+function detectDigits(bars) {
+  let d = 0;
+  for (let k = 0; k < Math.min(bars.length, 500); k++) for (const v of [bars[k].o, bars[k].c]) { const s = String(v); const i = s.indexOf("."); if (i >= 0) d = Math.max(d, s.length - i - 1); }
+  return Math.min(d, 5);
+}
+
+// ------------------------------------------------------------------ estado de la interfaz
+const $ = id => document.getElementById(id);
+let bars = [], barSec = 60, engine = null, dataLabel = "", synthetic = true;
+let playing = false, lastFrame = 0, acc = 0;
+const view = { tf: 15, visible: 110, offset: 0, follow: true, hoverX: null };
+
+function loadData(newBars, label, isSynthetic) {
+  bars = newBars; synthetic = isSynthetic; dataLabel = label;
+  barSec = detectBarSec(bars);
+  priceDigits = Math.max(2, detectDigits(bars));
+  const badge = $("dataBadge");
+  badge.textContent = label;
+  badge.className = "badge" + (isSynthetic ? " synthetic" : "");
+  const first = parts(bars[0].t), last = parts(bars[bars.length - 1].t);
+  $("goDate").min = `${first.y}-${pad(first.m)}-${pad(first.d)}`;
+  $("goDate").max = `${last.y}-${pad(last.m)}-${pad(last.d)}`;
+  if (barSec !== 60) view.tf = Math.max(view.tf, Math.round(barSec / 60)), $("tf").value = String([1, 5, 15].find(v => v >= barSec / 60) || 15);
+  restart();
+}
+
+function restart() {
+  setPlaying(false);
+  engine = new Engine(bars, barSec);
+  view.offset = 0; view.follow = true;
+  renderAll();
+}
+
+function runFast(cond, limit = Infinity) {
+  let n = 0;
+  while (engine.i < bars.length && n < limit) { engine.step(); n++; if (cond && cond()) break; }
+}
+
+function openingState() {
+  // Abre en un estado de trabajo real: avanza hasta el primer setup y un poco más
+  runFast(() => engine.setups.length > 0);
+  if (engine.setups.length) runFast(null, 40); else { engine.reset(); runFast(null, Math.min(bars.length, 3 * 1440)); }
+  renderAll();
+}
+
+// ------------------------------------------------------------------ reproducción
+function setPlaying(on) {
+  playing = on;
+  $("btnPlay").textContent = on ? "❚❚ Pausa" : "▶ Reproducir";
+  if (on) { lastFrame = performance.now(); acc = 0; requestAnimationFrame(frame); }
+}
+
+function inSessionSoon(t) {
+  const s = engine.session(t);
+  return s.trading && t >= s.start - 45 * 60 && t < s.cutoff + 15 * 60;
+}
+
+function frame(now) {
+  if (!playing) return;
+  const dt = Math.min(0.25, (now - lastFrame) / 1000); lastFrame = now;
+  acc += dt * Number($("speed").value) * 60 / barSec;
+  let n = Math.floor(acc); acc -= n;
+  while (n-- > 0 && engine.i < bars.length) engine.step();
+  if ($("skipOff").checked && engine.i < bars.length && !engine.orders.length && !engine.positions.length && !inSessionSoon(bars[engine.i].t)) {
+    while (engine.i < bars.length && !inSessionSoon(bars[engine.i].t)) engine.step();
+  }
+  renderAll();
+  if (engine.i >= bars.length) { setPlaying(false); return; }
+  requestAnimationFrame(frame);
+}
+
+// ------------------------------------------------------------------ dibujo del gráfico
+const canvas = $("chart"), ctx = canvas.getContext("2d");
+let colors = {};
+function readColors() {
+  const cs = getComputedStyle(document.documentElement);
+  for (const k of ["fg", "muted", "line", "bull", "bear", "ema", "fvg", "sl", "tp", "order", "band", "band-setup", "chart-bg", "grid", "accent"]) colors[k] = cs.getPropertyValue("--" + k).trim();
+}
+
+function tfData() {
+  const T = engine.tf[view.tf];
+  const n = T.arr.length + (T.form ? 1 : 0);
+  return { n, get: i => i < T.arr.length ? T.arr[i] : T.form, sec: view.tf * 60 };
+}
+
+function drawChart() {
+  const dpr = window.devicePixelRatio || 1;
+  const W = canvas.clientWidth, Hh = canvas.clientHeight;
+  if (canvas.width !== Math.round(W * dpr) || canvas.height !== Math.round(Hh * dpr)) { canvas.width = Math.round(W * dpr); canvas.height = Math.round(Hh * dpr); }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = colors["chart-bg"]; ctx.fillRect(0, 0, W, Hh);
+  const D = tfData();
+  if (!D.n) { ctx.fillStyle = colors.muted; ctx.font = "13px " + getComputedStyle(document.body).fontFamily; ctx.fillText("Sin datos todavía: pulsa Reproducir.", 16, 30); return; }
+
+  const axisR = 72, axisB = 24, plotW = W - axisR, plotH = Hh - axisB;
+  const visible = Math.max(20, Math.min(view.visible, 2000));
+  const rightPad = view.offset === 0 ? Math.round(visible * 0.14) : 0;   // espacio libre a la derecha para ver las órdenes activas
+  const last = Math.max(0, D.n - 1 - view.offset);
+  const first = Math.max(0, last - visible + 1);
+  const bw = plotW / (visible + rightPad);
+  const xOf = i => (i - first + 0.5) * bw;
+  const tStart = D.get(first).t, tEnd = D.get(last).t + D.sec;
+  const timeToX = t => {
+    let lo = first, hi = last;
+    if (t <= D.get(lo).t) return xOf(lo) - bw / 2 + (t - D.get(lo).t) / D.sec * bw;
+    while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (D.get(mid).t <= t) lo = mid; else hi = mid - 1; }
+    return xOf(lo) - bw / 2 + Math.min(1, (t - D.get(lo).t) / D.sec) * bw;
+  };
+
+  // escala vertical: velas visibles + niveles activos
+  let ymin = Infinity, ymax = -Infinity;
+  for (let i = first; i <= last; i++) { const b = D.get(i); ymin = Math.min(ymin, b.l); ymax = Math.max(ymax, b.h); }
+  const levels = [];
+  for (const s of engine.setups) {
+    const end = s.end ?? engine.now;
+    if (end < tStart || s.place > tEnd) continue;
+    levels.push(s.plan.l1, s.plan.l2, s.plan.sl, s.plan.tp1, s.plan.tp2);
+  }
+  for (const z of engine.zones) levels.push(z.low, z.high);
+  for (const v of levels) { ymin = Math.min(ymin, v); ymax = Math.max(ymax, v); }
+  const padY = (ymax - ymin) * 0.06 || 1; ymin -= padY; ymax += padY;
+  const yOf = v => (ymax - v) / (ymax - ymin) * plotH;
+
+  const font = getComputedStyle(document.body).fontFamily;
+  const mono = getComputedStyle(document.documentElement).getPropertyValue("--font-data");
+
+  // bandas de sesión
+  const seen = new Set();
+  for (let i = first; i <= last; i += Math.max(1, Math.floor(60 * 60 / D.sec))) {
+    const s = engine.session(D.get(i).t);
+    if (seen.has(s.key) || !s.trading) continue; seen.add(s.key);
+    const x1 = timeToX(s.start), x2 = timeToX(s.cutoff), x3 = timeToX(s.setupEnd);
+    ctx.fillStyle = colors.band; ctx.fillRect(Math.max(0, x1), 0, Math.max(0, Math.min(plotW, x2) - Math.max(0, x1)), plotH);
+    ctx.fillStyle = colors["band-setup"]; ctx.fillRect(Math.max(0, x1), 0, Math.max(0, Math.min(plotW, x3) - Math.max(0, x1)), plotH);
+  }
+
+  // rejilla y eje de precios
+  ctx.font = `11px ${mono}`; ctx.textBaseline = "middle";
+  const rawStep = (ymax - ymin) / 8, mag = 10 ** Math.floor(Math.log10(rawStep));
+  const step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(s => s >= rawStep) || rawStep;
+  for (let v = Math.ceil(ymin / step) * step; v <= ymax; v += step) {
+    const y = Math.round(yOf(v)) + 0.5;
+    ctx.strokeStyle = colors.grid; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(plotW, y); ctx.stroke();
+    ctx.fillStyle = colors.muted; ctx.fillText(v.toFixed(priceDigits > 2 ? 2 : priceDigits), plotW + 6, y);
+  }
+  // eje de tiempo
+  ctx.textBaseline = "top";
+  const labelEvery = Math.max(1, Math.ceil(70 / bw));
+  const dayMarks = [];
+  for (let i = first + 1, prev = parts(D.get(first).t); i <= last; i++) {
+    const p = parts(D.get(i).t);
+    if (p.d !== prev.d || p.m !== prev.m) dayMarks.push({ x: Math.round(xOf(i) - bw / 2) + 0.5, p });
+    prev = p;
+  }
+  for (const m of dayMarks) {
+    ctx.strokeStyle = colors.line; ctx.beginPath(); ctx.moveTo(m.x, 0); ctx.lineTo(m.x, plotH); ctx.stroke();
+    ctx.fillStyle = colors.fg; ctx.fillText(`${DOW[m.p.dow]} ${pad(m.p.d)}/${pad(m.p.m)}`, m.x + 3, plotH + 5);
+  }
+  ctx.fillStyle = colors.muted;
+  for (let i = first + 1; i <= last; i++) {
+    if ((i - first) % labelEvery !== 0) continue;
+    const x = xOf(i) - 14;
+    if (x > plotW - 34 || dayMarks.some(m => x > m.x - 40 && x < m.x + 72)) continue;
+    ctx.fillText(fmtHM(D.get(i).t), x, plotH + 5);
+  }
+
+  ctx.save(); ctx.beginPath(); ctx.rect(0, 0, plotW, plotH); ctx.clip();
+
+  // FVG válidos de la señal actual (antes de colocar)
+  const today = engine.day;
+  if (engine.zones.length && !(today && today.placed)) {
+    for (const z of engine.zones) {
+      const x1 = timeToX(z.start), x2 = view.offset === 0 ? plotW : timeToX(engine.now);
+      ctx.fillStyle = colors.fvg; ctx.globalAlpha = 0.14; ctx.fillRect(x1, yOf(z.high), x2 - x1, yOf(z.low) - yOf(z.high));
+      ctx.globalAlpha = 0.8; ctx.strokeStyle = colors.fvg; ctx.lineWidth = 1; ctx.strokeRect(x1, yOf(z.high), x2 - x1, yOf(z.low) - yOf(z.high));
+      ctx.globalAlpha = 1;
+    }
+  }
+  if (engine.signal.ready && engine.signal.swing != null && !(today && today.placed)) {
+    const y = yOf(engine.signal.swing);
+    ctx.setLineDash([4, 4]); ctx.strokeStyle = colors.muted; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(timeToX(engine.signal.swingTime), y); ctx.lineTo(plotW, y); ctx.stroke(); ctx.setLineDash([]);
+  }
+
+  // setups colocados (histórico + actual)
+  const hline = (v, x1, x2, color, dash, width = 1.25) => { const y = Math.round(yOf(v)) + 0.5; ctx.setLineDash(dash); ctx.strokeStyle = color; ctx.lineWidth = width; ctx.beginPath(); ctx.moveTo(x1, y); ctx.lineTo(x2, y); ctx.stroke(); ctx.setLineDash([]); };
+  const tag = (text, v, x, color) => { ctx.font = `10.5px ${mono}`; ctx.textBaseline = "bottom"; ctx.fillStyle = color; ctx.fillText(text, x + 3, yOf(v) - 2); };
+  for (const s of engine.setups) {
+    const end = s.end ?? engine.now;
+    if (end < tStart || s.place > tEnd) continue;
+    const zx1 = timeToX(s.zone.start), x1 = timeToX(s.place), z = s.zone;
+    const x2 = s.end == null && view.offset === 0 ? plotW : timeToX(end);
+    ctx.fillStyle = colors.fvg; ctx.globalAlpha = 0.12; ctx.fillRect(zx1, yOf(z.high), x2 - zx1, yOf(z.low) - yOf(z.high)); ctx.globalAlpha = 1;
+    if (s.swing != null) hline(s.swing, timeToX(s.swingTime), x2, colors.muted, [3, 4], 1);
+    const lines = [["L1", s.plan.l1, colors.order, [6, 4]], ["L2", s.plan.l2, colors.order, [6, 4]], ["SL", s.plan.sl, colors.sl, []],
+                   ["TP1", s.plan.tp1, colors.tp, []], ["TP2", s.plan.tp2, colors.tp, [2, 3]]];
+    const used = [];
+    for (const [name, v, col, dash] of lines) {
+      hline(v, x1, x2, col, dash);
+      const y = yOf(v);
+      const tx = used.some(u => Math.abs(u - y) < 11) ? x1 + 26 : x1;   // separa etiquetas de niveles muy próximos
+      used.push(y);
+      tag(name, v, tx, col);
+    }
+  }
+
+  // EMA20 M15
+  const m15 = engine.tf[15].arr;
+  if (engine.ema.length > 1) {
+    ctx.strokeStyle = colors.ema; ctx.lineWidth = 1.6; ctx.beginPath();
+    let started = false;
+    let lo = 0, hi = m15.length - 1;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (m15[mid].t + 900 < tStart) lo = mid + 1; else hi = mid; }
+    for (let k = Math.max(0, lo - 1); k < m15.length && m15[k].t <= tEnd; k++) {
+      const x = timeToX(m15[k].t + 900) - (view.tf === 15 ? bw / 2 : 0), y = yOf(engine.ema[k]);
+      if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+
+  // velas
+  const cw = Math.max(1, bw * 0.68);
+  for (let i = first; i <= last; i++) {
+    const b = D.get(i), x = xOf(i), up = b.c >= b.o, col = up ? colors.bull : colors.bear;
+    ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(Math.round(x) + 0.5, yOf(b.h)); ctx.lineTo(Math.round(x) + 0.5, yOf(b.l)); ctx.stroke();
+    const yo = yOf(b.o), yc = yOf(b.c);
+    ctx.fillRect(x - cw / 2, Math.min(yo, yc), cw, Math.max(1, Math.abs(yc - yo)));
+  }
+
+  // marcadores de llenado y salida
+  for (const e of engine.events) {
+    if (e.t < tStart || e.t > tEnd || e.kind === "place") continue;
+    const x = timeToX(e.t), y = yOf(e.price);
+    if (e.kind === "fill") {
+      ctx.fillStyle = e.dir < 0 ? colors.bear : colors.bull;
+      ctx.beginPath();
+      if (e.dir < 0) { ctx.moveTo(x - 6, y - 10); ctx.lineTo(x + 6, y - 10); ctx.lineTo(x, y - 2); } else { ctx.moveTo(x - 6, y + 10); ctx.lineTo(x + 6, y + 10); ctx.lineTo(x, y + 2); }
+      ctx.closePath(); ctx.fill();
+    } else {
+      ctx.fillStyle = e.net >= 0 ? colors.tp : colors.sl; ctx.strokeStyle = colors["chart-bg"]; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(x, y, 5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    }
+  }
+
+  // precio actual
+  if (view.offset === 0 && engine.i > 0) hline(engine.bid, 0, plotW, colors.accent, [1, 3], 1);
+  ctx.restore();
+  if (engine.i > 0) {
+    const y = yOf(engine.bid);
+    ctx.fillStyle = colors.accent; ctx.fillRect(plotW, y - 9, axisR, 18);
+    ctx.fillStyle = colors["chart-bg"]; ctx.font = `11px ${mono}`; ctx.textBaseline = "middle"; ctx.fillText(engine.bid.toFixed(2), plotW + 6, y);
+  }
+
+  // lectura bajo el cursor
+  const hov = $("hover");
+  if (view.hoverX != null && view.hoverX < plotW) {
+    const i = Math.min(last, Math.max(first, first + Math.floor(view.hoverX / bw)));
+    const b = D.get(i);
+    hov.textContent = `${fmtDate(b.t)} ${fmtHM(b.t)} srv · A ${px(b.o)} M ${px(b.h)} m ${px(b.l)} C ${px(b.c)}`;
+    ctx.strokeStyle = colors.muted; ctx.globalAlpha = 0.4; ctx.beginPath(); ctx.moveTo(Math.round(xOf(i)) + 0.5, 0); ctx.lineTo(Math.round(xOf(i)) + 0.5, plotH); ctx.stroke(); ctx.globalAlpha = 1;
+  } else hov.textContent = "";
+}
+
+// ------------------------------------------------------------------ paneles
+function renderState() {
+  const e = engine, s = e.sess;
+  if (!e.i) { $("clock").textContent = "Pulsa Reproducir para empezar"; }
+  else {
+    const mad = madridOf(e.now), ny = nyOf(e.now);
+    $("clock").textContent = `${DOW[parts(mad).dow]} ${fmtDate(mad)} · Madrid ${fmtHM(mad)} · NY ${fmtHM(ny)} · servidor ${fmtHM(e.now)}`;
+  }
+  const pill = $("windowPill");
+  if (s && s.trading && e.now >= s.start && e.now < s.cutoff) {
+    pill.textContent = e.now < s.setupEnd ? "Ventana de Londres: busca setups" : "Ventana de Londres: solo gestión";
+    pill.className = "pill live";
+  } else { pill.textContent = "Fuera de sesión"; pill.className = "pill idle"; }
+
+  const sig = e.signal;
+  $("stBias").innerHTML = !sig.ready ? '<span class="pill idle">sin calcular</span>' : sig.bias < 0 ? '<span class="pill sell">Bajista · ventas</span>' : sig.bias > 0 ? '<span class="pill buy">Alcista · compras</span>' : '<span class="pill idle">Ninguno</span>';
+  $("stEma").textContent = sig.ready ? `${px(sig.close)} / ${px(sig.ema)}` : "—";
+  $("stSwing").textContent = sig.swing != null ? `${px(sig.swing)} @ ${fmtHM(sig.swingTime)}` : "—";
+  $("stZones").textContent = sig.ready ? String(e.zones.length) : "—";
+  const d = e.day;
+  $("stDay").textContent = !d ? "—" : !d.trading ? "fin de semana" : d.exit ? "terminado" : d.placed ? (e.positions.length ? "posición abierta" : "limits colocadas") : (s && e.now >= s.setupEnd ? "sin setup (ventana cerrada)" : "buscando");
+
+  const box = $("ordersBox"); box.innerHTML = "";
+  if (!e.orders.length && !e.positions.length) box.innerHTML = '<div class="empty">Sin órdenes ni posiciones.</div>';
+  for (const o of e.orders) box.insertAdjacentHTML("beforeend", `<div class="row"><span>${o.tag} ${o.dir < 0 ? "sell" : "buy"} limit ${o.vol.toFixed(2)}</span><span>@ ${px(o.price)}</span><span>SL ${px(o.sl)} · TP ${px(o.tp)}</span></div>`);
+  for (const p of e.positions) {
+    const f = p.dir * ((p.dir < 0 ? e.ask : e.bid) - p.price) * P.vpp * p.vol;
+    box.insertAdjacentHTML("beforeend", `<div class="row"><span>${p.tag} ${p.dir < 0 ? "venta" : "compra"} ${p.vol.toFixed(2)}</span><span>@ ${px(p.price)}</span><span class="${f >= 0 ? "pos" : "neg"}">${money(f)}</span></div>`);
+  }
+  const fl = e.floating();
+  $("stFloat").textContent = money(fl); $("stFloat").className = fl > 0 ? "pos" : fl < 0 ? "neg" : "";
+  const dn = d ? d.net : 0;
+  $("stDayPnl").textContent = money(dn); $("stDayPnl").className = dn > 0 ? "pos" : dn < 0 ? "neg" : "";
+  $("stBalance").textContent = nf2.format(e.balance + fl);
+  const lastLog = e.logs[e.logs.length - 1];
+  $("lastLog").textContent = lastLog ? `${fmtHM(lastLog.t)} · ${lastLog.msg}` : "—";
+  $("lastLog").className = lastLog ? "" : "empty";
+}
+
+let renderedLogs = -1, renderedDays = -1, renderedExits = -1;
+function renderTabs(force = false) {
+  const e = engine;
+  const exits = e.events.length;
+  if (force || exits !== renderedExits || e.days.length !== renderedDays) {
+    renderedExits = exits; renderedDays = e.days.length;
+    const rows = e.days.filter(d => d.placed).slice().reverse().map(d => {
+      const p = d.plan, ex = d.exits.length ? describeExit(d) : (e.day === d && !d.exit ? "en curso" : "sin llenado");
+      return `<tr data-day="${d.key}"><td>${DOW[parts(mk(Math.floor(d.key / 10000), Math.floor(d.key / 100) % 100, d.key % 100)).dow]} ${fmtKey(d.key)}</td><td><span class="pill ${p.dir < 0 ? "sell" : "buy"}">${p.dir < 0 ? "Venta" : "Compra"}</span></td><td class="num">${px(p.l1)}</td><td class="num">${px(p.l2)}</td><td class="num">${px(p.sl)}</td><td class="num">${p.vol.toFixed(2)}</td><td>${d.fills.length ? d.fills.join(" + ") : "—"}</td><td>${ex}</td><td class="num ${d.net > 0 ? "pos" : d.net < 0 ? "neg" : ""}">${d.fills.length ? money(d.net) : "—"}</td></tr>`;
+    }).join("");
+    $("tradesBody").innerHTML = rows || '<tr><td colspan="9" class="empty">Aún no hay setups. Pulsa Reproducir o Ejecutar todo.</td></tr>';
+    renderStats();
+  }
+  if (force || e.logs.length !== renderedLogs) {
+    renderedLogs = e.logs.length;
+    const tail = e.logs.slice(-400).reverse();
+    $("logBox").innerHTML = tail.map(l => `<div class="${l.trade ? "trade" : ""}"><time>${fmtDate(l.t)} ${fmtHM(l.t)}</time>${escapeHtml(l.msg)}</div>`).join("") || '<div class="empty">Sin mensajes.</div>';
+  }
+}
+function describeExit(d) {
+  if (d.exits.includes("SL")) return "SL";
+  if (d.exits.includes("TP")) return d.fills.length > 1 ? "TP2 (combinado)" : "TP1";
+  return "Cierre en la llegada de NY";
+}
+const escapeHtml = s => s.replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+
+function renderStats() {
+  const e = engine;
+  const traded = e.days.filter(d => d.fills.length && (d.exit || d !== e.day));
+  const nets = traded.map(d => d.net);
+  const wins = nets.filter(v => v > 0), losses = nets.filter(v => v < 0);
+  const sum = a => a.reduce((x, y) => x + y, 0);
+  let peak = P.balance, maxDD = 0, maxDDpct = 0, bal = P.balance, streak = 0, maxStreak = 0;
+  for (const v of nets) { bal += v; peak = Math.max(peak, bal); const dd = peak - bal; if (dd > maxDD) { maxDD = dd; maxDDpct = peak ? dd / peak * 100 : 0; } streak = v < 0 ? streak + 1 : 0; maxStreak = Math.max(maxStreak, streak); }
+  const total = sum(nets), best = Math.max(0, ...nets);
+  const placed = e.days.filter(d => d.placed).length, noFill = e.days.filter(d => d.placed && !d.fills.length && d !== e.day).length;
+  const stat = (label, value, cls = "") => `<div class="stat"><span>${label}</span><b class="${cls}">${value}</b></div>`;
+  $("statsBox").innerHTML = [
+    stat("Resultado neto", money(total), total > 0 ? "pos" : total < 0 ? "neg" : ""),
+    stat("Días operados", String(traded.length)),
+    stat("% días ganadores", traded.length ? (wins.length / traded.length * 100).toFixed(1) + " %" : "—"),
+    stat("Profit factor", losses.length ? (sum(wins) / Math.abs(sum(losses))).toFixed(2) : wins.length ? "∞" : "—"),
+    stat("Esperanza por día", traded.length ? money(total / traded.length) : "—"),
+    stat("Ganancia media", wins.length ? money(sum(wins) / wins.length) : "—", "pos"),
+    stat("Pérdida media", losses.length ? money(sum(losses) / losses.length) : "—", "neg"),
+    stat("Drawdown máximo", maxDD ? `${nf2.format(maxDD)} (${maxDDpct.toFixed(2)} %)` : "0,00"),
+    stat("Racha máx. de días en pérdida", String(maxStreak)),
+    stat("Setups colocados", String(placed)),
+    stat("Setups sin llenado", String(noFill)),
+    stat("Mejor día / total", total > 0 ? (best / total * 100).toFixed(1) + " %" : "—", total > 0 && best / total > 0.5 ? "neg" : "")
+  ].join("");
+  $("statsNote").textContent = synthetic
+    ? "Estas cifras salen de datos aleatorios de demostración: no dicen nada sobre la estrategia. Carga tu CSV de MT5 para medirla."
+    : `Medido sobre ${dataLabel}, con ejecución tipo 1 minuto OHLC. Compáralo con el Strategy Tester antes de sacar conclusiones.`;
+  drawEquity();
+}
+
+function drawEquity() {
+  const c = $("equity"), g = c.getContext("2d"), dpr = window.devicePixelRatio || 1;
+  const W = c.clientWidth, Hh = c.clientHeight;
+  if (!W) return;
+  c.width = Math.round(W * dpr); c.height = Math.round(Hh * dpr); g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.fillStyle = colors["chart-bg"]; g.fillRect(0, 0, W, Hh);
+  const pts = engine.equity;
+  const mono = getComputedStyle(document.documentElement).getPropertyValue("--font-data");
+  g.font = `11px ${mono}`; g.fillStyle = colors.muted; g.textBaseline = "top";
+  g.fillText("Balance cerrado", 8, 6);
+  if (pts.length < 2) { g.fillText("Sin operaciones cerradas todavía.", 8, 24); return; }
+  let lo = Infinity, hi = -Infinity; for (const p of pts) { lo = Math.min(lo, p.v); hi = Math.max(hi, p.v); }
+  if (hi - lo < 1) { hi += 1; lo -= 1; }
+  const L = 8, R = 76, T = 24, B = 10, xw = W - L - R, yh = Hh - T - B;
+  const x = k => L + k / (pts.length - 1) * xw, y = v => T + (hi - v) / (hi - lo) * yh;
+  g.strokeStyle = colors.grid; g.lineWidth = 1;
+  for (const v of [lo, (lo + hi) / 2, hi]) { g.beginPath(); g.moveTo(L, y(v)); g.lineTo(L + xw, y(v)); g.stroke(); g.fillStyle = colors.muted; g.textBaseline = "middle"; g.fillText(nf2.format(v), L + xw + 6, y(v)); }
+  g.beginPath(); g.moveTo(x(0), y(pts[0].v)); pts.forEach((p, k) => g.lineTo(x(k), y(p.v)));
+  g.strokeStyle = colors.accent; g.lineWidth = 1.8; g.stroke();
+  g.lineTo(x(pts.length - 1), T + yh); g.lineTo(x(0), T + yh); g.closePath(); g.globalAlpha = 0.1; g.fillStyle = colors.accent; g.fill(); g.globalAlpha = 1;
+  const lp = pts[pts.length - 1]; g.fillStyle = colors.accent; g.beginPath(); g.arc(x(pts.length - 1), y(lp.v), 3.5, 0, Math.PI * 2); g.fill();
+}
+
+function renderAll(force = false) { drawChart(); renderState(); renderTabs(force); }
+
+// ------------------------------------------------------------------ eventos de la interfaz
+$("btnPlay").addEventListener("click", () => { if (engine.i >= bars.length) return; view.offset = 0; setPlaying(!playing); });
+$("btnStep").addEventListener("click", () => { setPlaying(false); engine.step(); view.offset = 0; renderAll(); });
+$("btnEvent").addEventListener("click", () => { setPlaying(false); const n0 = engine.tradeEvents; runFast(() => engine.tradeEvents > n0); view.offset = 0; renderAll(); });
+$("btnDay").addEventListener("click", () => {
+  setPlaying(false);
+  const k0 = engine.dayKey;
+  runFast(() => engine.dayKey !== k0 && engine.day.trading);
+  runFast(() => { const s = engine.sess; return s && engine.now >= s.start - 30 * 60; });
+  view.offset = 0; renderAll();
+});
+$("btnRunAll").addEventListener("click", () => { setPlaying(false); runFast(null); view.offset = 0; renderAll(true); });
+$("btnReset").addEventListener("click", () => restart());
+$("btnFollow").addEventListener("click", () => { view.offset = 0; renderAll(); });
+$("tf").addEventListener("change", ev => { view.tf = Number(ev.target.value); view.offset = 0; view.visible = view.tf === 1 ? 180 : view.tf === 5 ? 140 : 110; renderAll(); });
+$("btnGo").addEventListener("click", () => {
+  const v = $("goDate").value; if (!v) return;
+  const [y, m, d] = v.split("-").map(Number);
+  const s = computeSession(mk(y, m, d, 12));
+  const target = s.start - 60 * 60;
+  setPlaying(false);
+  if (engine.now > target) engine.reset();
+  runFast(() => engine.now >= target);
+  view.offset = 0; renderAll(true);
+});
+$("tradesBody").addEventListener("click", ev => {
+  const tr = ev.target.closest("tr[data-day]"); if (!tr) return;
+  const key = Number(tr.dataset.day);
+  const setup = engine.setups.find(s => s.day === key); if (!setup) return;
+  const D = tfData();
+  let idx = D.n - 1; while (idx > 0 && D.get(idx).t > (setup.end ?? setup.place)) idx--;
+  view.offset = Math.max(0, D.n - 1 - Math.min(D.n - 1, idx + 25));
+  drawChart();
+  canvas.scrollIntoView({ behavior: "smooth", block: "center" });
+});
+
+// arrastrar para desplazar, rueda para zoom
+let drag = null;
+canvas.addEventListener("pointerdown", ev => { drag = { x: ev.clientX, off: view.offset }; canvas.setPointerCapture(ev.pointerId); });
+canvas.addEventListener("pointermove", ev => {
+  const r = canvas.getBoundingClientRect(); view.hoverX = ev.clientX - r.left;
+  if (drag) {
+    const bw = (canvas.clientWidth - 72) / view.visible;
+    const D = tfData();
+    view.offset = Math.max(0, Math.min(D.n - 20, Math.round(drag.off + (ev.clientX - drag.x) / bw)));
+  }
+  drawChart();
+});
+canvas.addEventListener("pointerup", () => { drag = null; });
+canvas.addEventListener("pointerleave", () => { view.hoverX = null; drawChart(); });
+canvas.addEventListener("wheel", ev => { ev.preventDefault(); view.visible = Math.max(20, Math.min(1500, Math.round(view.visible * (ev.deltaY > 0 ? 1.15 : 0.87)))); drawChart(); }, { passive: false });
+
+// pestañas
+for (const tab of document.querySelectorAll('[role="tab"]')) {
+  tab.addEventListener("click", () => {
+    for (const t of document.querySelectorAll('[role="tab"]')) { const on = t === tab; t.setAttribute("aria-selected", String(on)); $(t.getAttribute("aria-controls")).hidden = !on; }
+    if (tab.id === "tab-stats") drawEquity();
+  });
+}
+
+// datos
+$("btnDemo").addEventListener("click", () => { loadData(makeSyntheticBars(), "Datos sintéticos de demostración", true); openingState(); });
+$("csvFile").addEventListener("change", ev => {
+  const f = ev.target.files[0]; if (!f) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const parsed = parseCsv(String(reader.result));
+      const a = parts(parsed[0].t), b = parts(parsed[parsed.length - 1].t);
+      loadData(parsed, `${f.name} · ${parsed.length.toLocaleString("es-ES")} barras · ${pad(a.d)}/${pad(a.m)}/${a.y} → ${pad(b.d)}/${pad(b.m)}/${b.y}`, false);
+      $("paramsMsg").textContent = "";
+      renderAll(true);
+    } catch (err) {
+      $("paramsMsg").textContent = "No he podido leer el archivo: " + err.message;
+      document.getElementById("tab-params").click();
+    }
+    ev.target.value = "";
+  };
+  reader.readAsText(f);
+});
+
+// parámetros
+const PARAM_IDS = Object.keys(DEFAULTS);
+function fillParams() { for (const k of PARAM_IDS) { const el = $("p_" + k); if (el) el.value = P[k]; } }
+$("paramsForm").addEventListener("submit", ev => {
+  ev.preventDefault();
+  const next = { ...P };
+  for (const k of PARAM_IDS) {
+    const el = $("p_" + k); if (!el) continue;
+    next[k] = typeof DEFAULTS[k] === "number" ? Number(el.value) : el.value.trim();
+  }
+  const bad = ["riskMoney", "tpMoney", "slDist", "vpp", "tick", "volStep", "volMin"].find(k => !(next[k] > 0));
+  if (bad) { $("paramsMsg").textContent = "Revisa los valores: hay un campo que debe ser mayor que 0."; return; }
+  for (const k of ["start", "setupEnd", "nyCut"]) if (!/^\d{1,2}:\d{2}$/.test(next[k])) { $("paramsMsg").textContent = "Las horas deben tener formato HH:MM."; return; }
+  P = next;
+  $("paramsMsg").textContent = "Parámetros aplicados. Simulación reiniciada.";
+  restart();
+});
+
+// tema
+readColors();
+const mq = window.matchMedia("(prefers-color-scheme: dark)");
+const onTheme = () => { readColors(); renderAll(true); };
+if (mq.addEventListener) mq.addEventListener("change", onTheme);
+new MutationObserver(onTheme).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+window.addEventListener("resize", () => { drawChart(); drawEquity(); });
+document.fonts && document.fonts.ready.then(() => drawChart());
+
+// arranque: datos de demostración en un estado de trabajo
+fillParams();
+loadData(makeSyntheticBars(), "Datos sintéticos de demostración", true);
+openingState();
+})();
+</script>

@@ -13,6 +13,7 @@ Versión mecánica aprobada de la estrategia de Gerard García (barrida de máxi
 | `docs/TRAZABILIDAD.md` | Matriz requisito → código → prueba → estado |
 | `docs/PRUEBAS_Y_VALIDACION.md` | Verificaciones hechas, protocolo de pruebas, backtesting, limitaciones y lista de verificación |
 | `tests/reference_model.py` | Modelo de referencia en Python (horarios y cálculo de órdenes) |
+| `tools/simulador/index.html` | Simulador visual de replay (réplica de la lógica del EA en el navegador; carga barras M1 exportadas de MT5) |
 
 ## 2. Qué hace
 
@@ -79,7 +80,14 @@ Compara la línea `SETUP` del log con:
 python3 tests/reference_model.py plan SELL <fvg_low> <fvg_high> --vpp <valor por punto y lote> --step <paso de lote>
 ```
 
-## 7. Advertencias
+## 7. Simulador visual de replay
+
+`tools/simulador/index.html` reproduce vela a vela la lógica del EA en el navegador: sesgo, swing, FVG, colocación de L1/L2, llenados, paso de TP1 a TP2, SL/TP y cierre en la llegada de NY, con estadísticas y diario.
+- Abre con datos sintéticos de demostración, que no representan el mercado.
+- Para datos reales: en MT5, ve a **Ver → Símbolos → Barras**, elige el símbolo y **M1**, pulsa **Exportar barras** y carga el CSV con el botón *Cargar CSV de MT5*.
+- Ejecuta en modo "1 minuto OHLC". No sustituye al Strategy Tester con el EA real (modo visual + ticks reales).
+
+## 8. Advertencias
 
 - R:R ≈ 0,6 (riesgo 800 / objetivo 500). La estrategia necesita un win rate superior al 61,5 % antes de costes.
 - Los resultados mostrados en el vídeo no están verificados y no garantizan nada.
