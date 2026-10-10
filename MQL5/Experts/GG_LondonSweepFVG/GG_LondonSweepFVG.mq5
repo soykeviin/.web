@@ -1307,8 +1307,11 @@ void LogConfiguration()
    string modeText   = (marginMode == ACCOUNT_MARGIN_MODE_RETAIL_HEDGING) ? "hedging" : "netting";
    double unitProfit = 0.0;
    double bid        = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   if(bid > 0.0)
-      OrderCalcProfit(ORDER_TYPE_BUY, _Symbol, 1.0, bid, bid + 1.0, unitProfit);
+   if(bid > 0.0 && !OrderCalcProfit(ORDER_TYPE_BUY, _Symbol, 1.0, bid, bid + 1.0, unitProfit))
+     {
+      Log(StringFormat("AVISO: OrderCalcProfit falló al calcular el valor por punto (error %d)", GetLastError()));
+      unitProfit = 0.0;
+     }
 
    Log(StringFormat("Símbolo: dígitos %d, tick %s, tick value %.5f, contrato %.2f, valor por 1.0 de precio y lote %.4f %s",
                     _Digits, DoubleToString(g_tickSize, _Digits), SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE),
