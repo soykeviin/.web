@@ -2,7 +2,7 @@
 
 Expert Advisor en MQL5 nativo que opera la ruptura de la **acumulación 09:00–09:30 (hora de Nueva York)** en el NASDAQ 100, timeframe M5, con **una sola operación por día**.
 
-Archivo: [`Experts/NasdaqAccumulationEA.mq5`](Experts/NasdaqAccumulationEA.mq5)
+Archivo: [`MQL5/Experts/NasdaqAccumulationEA.mq5`](MQL5/Experts/NasdaqAccumulationEA.mq5) · Preset: [`MQL5/Presets/NasdaqAccumulationEA.set`](MQL5/Presets/NasdaqAccumulationEA.set) · Cambios: [`CHANGELOG.md`](CHANGELOG.md)
 
 > **Importante:** el código se revisó a mano y la conversión horaria se verificó contra la base de datos de zonas horarias IANA (2015–2026, 0 errores), pero **no se pudo compilar en este entorno** porque MetaEditor no está disponible. Compílalo con F7 en MetaEditor antes de usarlo y comparte cualquier error o warning que aparezca.
 

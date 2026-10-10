@@ -1,0 +1,17 @@
+NASDAQ ACCUMULATION EA - INSTALACION RAPIDA
+==========================================
+
+1. En MetaTrader 5: Archivo -> Abrir carpeta de datos.
+2. Copia la carpeta "MQL5" de este proyecto dentro de la carpeta de datos
+   (se fusiona con la existente; acepta si pregunta por carpetas que ya existen):
+     MQL5\Experts\NasdaqAccumulationEA.mq5   -> el EA
+     MQL5\Presets\NasdaqAccumulationEA.set   -> parametros por defecto
+3. Abre MetaEditor (F4), abre NasdaqAccumulationEA.mq5 y compila con F7.
+   Debe terminar con "0 errors".
+4. En MT5, panel Navegador -> clic derecho en "Asesores Expertos" -> Actualizar.
+5. Backtest: Ver -> Probador de estrategias. Simbolo NASDAQ (NAS100/US100/USTEC),
+   periodo M5, modelado "Cada tick basado en ticks reales", Visualizacion activada.
+   En "Parametros de entrada" -> clic derecho -> Cargar -> NasdaqAccumulationEA.set.
+
+Documentacion completa: README.md
+Historial de versiones: CHANGELOG.md
